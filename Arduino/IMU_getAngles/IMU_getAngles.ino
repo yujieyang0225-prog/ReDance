@@ -3,7 +3,7 @@
 #define ICM20948_ADDR 0x69 //default I2C address, if solder jumper bridged: 0x68
 ICM20948_WE myIMU = ICM20948_WE(ICM20948_ADDR); //create an ICM20948 object
 
-int ESP_version =  1; //specify the version of the ESP here (1 or 2)
+int ESP_version =  2; //specify the version of the ESP here (1 or 2)
 
 // I2C pins
 #define I2C_SDA 23
