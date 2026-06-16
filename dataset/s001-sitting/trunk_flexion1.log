@@ -1,0 +1,7 @@
+=~=~=~=~=~=~=~=~=~=~=~= PuTTY log 2026.06.16 15:11:14 =~=~=~=~=~=~=~=~=~=~=~=
+Event Log: Opening serial device COM11
+Event Log: Configuring baud rate 115200
+Event Log: Configuring 8 data bits
+Event Log: Configuring 1 stop bit
+Event Log: Configuring no parity
+Event Log: Configuring XON/XOFF flow control
