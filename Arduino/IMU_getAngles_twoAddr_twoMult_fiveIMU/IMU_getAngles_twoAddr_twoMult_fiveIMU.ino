@@ -204,5 +204,5 @@ void loop() {
   Serial.print("z4:");
   Serial.println(angles4.z);
 
-  delay(100);
+  delay(10);
 }
