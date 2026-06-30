@@ -141,23 +141,28 @@ void setup() {
 void loop() {
   pcaselect(0);
   myIMU0.readSensor();
-  xyzFloat angles0 = myIMU0.getAngles();
+  xyzFloat angles0;
+  myIMU0.getAngles(&angles0);
   
   pcaselect(1);
-  myIMU1.readSensor();
-  xyzFloat angles1 = myIMU1.getAngles();
+  myIMU0.readSensor();
+  xyzFloat angles1;
+  myIMU0.getAngles(&angles1);
 
   pcaselect(2);
-  myIMU2.readSensor();
-  xyzFloat angles2 = myIMU2.getAngles();
+  myIMU0.readSensor();
+  xyzFloat angles2;
+  myIMU0.getAngles(&angles2);
 
   pcaselect(3);
-  myIMU3.readSensor();
-  xyzFloat angles3 = myIMU3.getAngles();
+  myIMU0.readSensor();
+  xyzFloat angles3;
+  myIMU0.getAngles(&angles3);
 
   pcaselect(4);
   myIMU4.readSensor();
-  xyzFloat angles4 = myIMU4.getAngles();
+  xyzFloat angles4;
+  myIMU0.getAngles(&angles4);
 
   Serial.print("x0:");
   Serial.print(angles0.x);
