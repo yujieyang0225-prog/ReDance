@@ -1,4 +1,6 @@
+import os
 import sys
+import json
 import time
 import threading
 
@@ -21,6 +23,11 @@ SERIAL_PORT = "/dev/cu.usbserial-0001"   # find yours with:  ls /dev/cu.*
 BAUD = 115200
 CALIB_SECONDS = 2.0                      # neutral hold at startup
 GUI_UPDATE_MS = 50
+
+# Shared state file consumed by run_professional_rehab.py's live sensor mode.
+STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "live_state.json")
+STATE_WRITE_INTERVAL = 0.03  # seconds, throttles disk writes
 
 # how each label is shown: (text, color)
 DISPLAY = {
@@ -52,6 +59,7 @@ class LiveClassifier(threading.Thread):
         self._neutral = []
         self._calib_start = None
         self._classifier = None
+        self._last_write = 0.0
 
     def open(self):
         self.ser = serial.Serial(self.port, self.baud, timeout=1)
@@ -111,6 +119,28 @@ class LiveClassifier(threading.Thread):
                         "lean": cs["lean"], "lift_L": cs["lift_L"],
                         "lift_R": cs["lift_R"], "turn": cs["turn"],
                     }
+
+            self._write_state()
+
+    def _write_state(self):
+        now = time.time()
+        if now - self._last_write < STATE_WRITE_INTERVAL:
+            return
+        self._last_write = now
+        with self._lock:
+            payload = {
+                "state": self.state,
+                "label": self.label,
+                "features": dict(self.features),
+                "ts": now,
+            }
+        tmp = STATE_FILE + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump(payload, f)
+            os.replace(tmp, STATE_FILE)
+        except OSError:
+            pass
 
     def snapshot(self):
         with self._lock:
