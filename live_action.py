@@ -15,11 +15,12 @@ from mapping import CHANNELS, parse_line, calibrate_neutral, MovementMapper
 from classify import (
     ActionClassifier, NEUTRAL, LEAN, LIFT_L, LIFT_R, TURN_LEFT, TURN_RIGHT,
 )
+from game import SequenceGame, POINTS_PER_STEP, BONUS_ON_COMPLETE
 
 # ---------------------------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------------------------
-SERIAL_PORT = "/dev/cu.usbserial-0001"   # find yours with:  ls /dev/cu.*
+SERIAL_PORT = "/dev/cu.usbserial-59690891081"   # find yours with:  ls /dev/cu.*
 BAUD = 115200
 CALIB_SECONDS = 2.0                      # neutral hold at startup
 GUI_UPDATE_MS = 50
@@ -39,6 +40,29 @@ DISPLAY = {
     TURN_RIGHT: ("Turn RIGHT",        "#8e44ad"),
 }
 
+# how each game event is flashed: (text, color)
+EVENT_DISPLAY = {
+    "correct": ("+%d" % POINTS_PER_STEP, "#27ae60"),
+    "restart": ("Restarted the sequence  +%d" % POINTS_PER_STEP, "#f1c40f"),
+    "wrong": ("Wrong move — sequence reset", "#e74c3c"),
+    "complete": ("Sequence complete!  +%d bonus" % BONUS_ON_COMPLETE, "#f1c40f"),
+}
+EVENT_FLASH_SECONDS = 1.5
+
+
+def render_sequence_html(sequence, progress):
+    parts = []
+    for i, action in enumerate(sequence):
+        name = DISPLAY.get(action, (action, "#cfd3d8"))[0]
+        if i < progress:
+            color = "#27ae60"       # done
+        elif i == progress:
+            color = "#f1c40f"       # up next
+        else:
+            color = "#5a5f68"       # pending
+        parts.append('<span style="color:%s;">%s</span>' % (color, name))
+    return "  →  ".join(parts)
+
 
 class LiveClassifier(threading.Thread):
     def __init__(self, port, baud):
@@ -55,6 +79,10 @@ class LiveClassifier(threading.Thread):
         self.features = {"lean": 0.0, "lift_L": 0.0,
                          "lift_R": 0.0, "turn": 0.0}
         self.error = None
+
+        self.game = SequenceGame()
+        self.game_event = None
+        self.game_event_ts = 0.0
 
         self._neutral = []
         self._calib_start = None
@@ -74,6 +102,7 @@ class LiveClassifier(threading.Thread):
             self._neutral = []
             self._calib_start = None
             self._classifier = None
+            self.game.reset_edge()
 
     def run(self):
         while not self._stop.is_set():
@@ -119,6 +148,10 @@ class LiveClassifier(threading.Thread):
                         "lean": cs["lean"], "lift_L": cs["lift_L"],
                         "lift_R": cs["lift_R"], "turn": cs["turn"],
                     }
+                    event = self.game.update(out["label"])
+                    if event is not None:
+                        self.game_event = event
+                        self.game_event_ts = time.time()
 
             self._write_state()
 
@@ -132,6 +165,9 @@ class LiveClassifier(threading.Thread):
                 "state": self.state,
                 "label": self.label,
                 "features": dict(self.features),
+                "game": self.game.snapshot(),
+                "game_event": self.game_event,
+                "game_event_ts": self.game_event_ts,
                 "ts": now,
             }
         tmp = STATE_FILE + ".tmp"
@@ -146,6 +182,10 @@ class LiveClassifier(threading.Thread):
         with self._lock:
             return (self.state, self.progress, self.label,
                     dict(self.features), self.error)
+
+    def game_snapshot(self):
+        with self._lock:
+            return self.game.snapshot(), self.game_event, self.game_event_ts
 
     def stop(self):
         self._stop.set()
@@ -218,6 +258,22 @@ def main():
         bars[key] = bar
     root.addLayout(grid)
 
+    score_label = QtWidgets.QLabel("Score: 0   Rounds: 0")
+    score_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+    score_label.setStyleSheet("color:#e5e7eb; font-size:18px; font-weight:700;")
+    root.addWidget(score_label)
+
+    seq_label = QtWidgets.QLabel()
+    seq_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+    seq_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
+    seq_label.setStyleSheet("font-size:14px;")
+    root.addWidget(seq_label)
+
+    flash_label = QtWidgets.QLabel("")
+    flash_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+    flash_label.setStyleSheet("font-size:13px; font-weight:600;")
+    root.addWidget(flash_label)
+
     btn = QtWidgets.QPushButton("Recalibrate (hold still)")
     btn.setStyleSheet(
         "QPushButton{color:#cfd3d8; background:#1c1f26; border:none;"
@@ -228,9 +284,20 @@ def main():
 
     def update():
         state, progress, label, feats, error = reader.snapshot()
+        game, event, event_ts = reader.game_snapshot()
         if error is not None:
             status.setText("Serial error: " + error)
             return
+        score_label.setText(
+            "Score: %d   Rounds: %d" % (game["score"], game["rounds_completed"]))
+        seq_label.setText(render_sequence_html(game["sequence"], game["progress"]))
+        if event is not None and time.time() - event_ts < EVENT_FLASH_SECONDS:
+            text, color = EVENT_DISPLAY.get(event, (event, "#cfd3d8"))
+            flash_label.setText(text)
+            flash_label.setStyleSheet(
+                "color:%s; font-size:13px; font-weight:600;" % color)
+        else:
+            flash_label.setText("")
         if state == "calibrating":
             remaining = max(0.0, CALIB_SECONDS * (1.0 - progress))
             status.setText(
