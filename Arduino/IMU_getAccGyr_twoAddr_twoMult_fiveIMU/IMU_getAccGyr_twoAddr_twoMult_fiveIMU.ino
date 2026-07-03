@@ -46,7 +46,13 @@ void pcaselect(uint8_t i) {
     return;
   }
 }
+float getPitchFromAcc(xyzFloat a) {
+  return atan2(a.x, sqrt(a.y * a.y + a.z * a.z)) * 180.0 / PI;
+}
 
+float getRollFromAcc(xyzFloat a) {
+  return atan2(a.y, a.z) * 180.0 / PI;
+}
 void setup() {
   
   if (ESP_version==1) {
@@ -141,122 +147,71 @@ void setup() {
 void loop() {
   pcaselect(0);
   myIMU0.readSensor();
-  xyzFloat aVal0 = myIMU0.getGValues();
-  xyzFloat gVal0 = myIMU0.getGyrValues();
-  
+  xyzFloat aVal0;
+  xyzFloat gVal0;
+  myIMU0.getGValues(&aVal0);
+  myIMU0.getGyrValues(&gVal0);
+
   pcaselect(1);
   myIMU1.readSensor();
-  xyzFloat aVal1 = myIMU1.getGValues();
-  xyzFloat gVal1 = myIMU1.getGyrValues();
+  xyzFloat aVal1;
+  xyzFloat gVal1;
+  myIMU1.getGValues(&aVal1);
+  myIMU1.getGyrValues(&gVal1);
 
   pcaselect(2);
   myIMU2.readSensor();
-  xyzFloat aVal2 = myIMU2.getGValues();
-  xyzFloat gVal2 = myIMU2.getGyrValues();
+  xyzFloat aVal2;
+  xyzFloat gVal2;
+  myIMU2.getGValues(&aVal2);
+  myIMU2.getGyrValues(&gVal2);
 
   pcaselect(3);
   myIMU3.readSensor();
-  xyzFloat aVal3 = myIMU3.getGValues();
-  xyzFloat gVal3 = myIMU3.getGyrValues();
+  xyzFloat aVal3;
+  xyzFloat gVal3;
+  myIMU3.getGValues(&aVal3);
+  myIMU3.getGyrValues(&gVal3);
 
   pcaselect(4);
   myIMU4.readSensor();
-  xyzFloat aVal4 = myIMU4.getGValues();
-  xyzFloat gVal4 = myIMU4.getGyrValues();
+  xyzFloat aVal4;
+  xyzFloat gVal4;
+  myIMU4.getGValues(&aVal4);
+  myIMU4.getGyrValues(&gVal4);
 
-  Serial.print("ax0:");
-  Serial.print(aVal0.x);
-  Serial.print(",");
-  Serial.print("ay0:");
-  Serial.print(aVal0.y);
-  Serial.print(",");
-  Serial.print("az0:");
-  Serial.print(aVal0.z);
-  Serial.print(",");
-  Serial.print("gx0:");
-  Serial.print(gVal0.x);
-  Serial.print(",");
-  Serial.print("gy0:");
-  Serial.print(gVal0.y);
-  Serial.print(",");
-  Serial.print("gz0:");
-  Serial.print(gVal0.z);
-  Serial.print(",");
+  float pitch0 = getPitchFromAcc(aVal0);
+  float roll0  = getRollFromAcc(aVal0);
 
-  Serial.print("ax1:");
-  Serial.print(aVal1.x);
-  Serial.print(",");
-  Serial.print("ay1:");
-  Serial.print(aVal1.y);
-  Serial.print(",");
-  Serial.print("az1:");
-  Serial.print(aVal1.z);
-  Serial.print(",");
-  Serial.print("gx1:");
-  Serial.print(gVal1.x);
-  Serial.print(",");
-  Serial.print("gy1:");
-  Serial.print(gVal1.y);
-  Serial.print(",");
-  Serial.print("gz1:");
-  Serial.print(gVal1.z);
+  float pitch1 = getPitchFromAcc(aVal1);
+  float roll1  = getRollFromAcc(aVal1);
+
+  float pitch2 = getPitchFromAcc(aVal2);
+  float roll2  = getRollFromAcc(aVal2);
+
+  float pitch3 = getPitchFromAcc(aVal3);
+  float roll3  = getRollFromAcc(aVal3);
+
+  float pitch4 = getPitchFromAcc(aVal4);
+  float roll4  = getRollFromAcc(aVal4);
+
+  Serial.print(millis());
   Serial.print(",");
 
-  Serial.print("ax2:");
-  Serial.print(aVal2.x);
-  Serial.print(",");
-  Serial.print("ay2:");
-  Serial.print(aVal2.y);
-  Serial.print(",");
-  Serial.print("az2:");
-  Serial.print(aVal2.z);
-  Serial.print(",");
-  Serial.print("gx2:");
-  Serial.print(gVal2.x);
-  Serial.print(",");
-  Serial.print("gy2:");
-  Serial.print(gVal2.y);
-  Serial.print(",");
-  Serial.print("gz2:");
-  Serial.print(gVal2.z);
-  Serial.print(",");
+  Serial.print(pitch0); Serial.print(",");
+  Serial.print(roll0);  Serial.print(",");
 
-  Serial.print("ax3:");
-  Serial.print(aVal3.x);
-  Serial.print(",");
-  Serial.print("ay3:");
-  Serial.print(aVal3.y);
-  Serial.print(",");
-  Serial.print("az3:");
-  Serial.print(aVal3.z);
-  Serial.print(",");
-  Serial.print("gx3:");
-  Serial.print(gVal3.x);
-  Serial.print(",");
-  Serial.print("gy3:");
-  Serial.print(gVal3.y);
-  Serial.print(",");
-  Serial.print("gz3:");
-  Serial.print(gVal3.z);
-  Serial.print(",");
+  Serial.print(pitch1); Serial.print(",");
+  Serial.print(roll1);  Serial.print(",");
 
-  Serial.print("ax4:");
-  Serial.print(aVal4.x);
-  Serial.print(",");
-  Serial.print("ay4:");
-  Serial.print(aVal4.y);
-  Serial.print(",");
-  Serial.print("az4:");
-  Serial.print(aVal4.z);
-  Serial.print(",");
-  Serial.print("gx4:");
-  Serial.print(gVal4.x);
-  Serial.print(",");
-  Serial.print("gy4:");
-  Serial.print(gVal4.y);
-  Serial.print(",");
-  Serial.print("gz4:");
-  Serial.println(gVal4.z);
+  Serial.print(pitch2); Serial.print(",");
+  Serial.print(roll2);  Serial.print(",");
+
+  Serial.print(pitch3); Serial.print(",");
+  Serial.print(roll3);  Serial.print(",");
+
+  Serial.print(pitch4); Serial.print(",");
+  Serial.println(roll4);
 
   delay(10);
 }
