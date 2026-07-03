@@ -28,6 +28,25 @@ current_exercise = 0
 exercise_start_time = time.time()
 live_mode = False
 
+# Console feedback for the sequence game running inside live_action.py.
+GAME_EVENT_TEXT = {
+    "correct": "Correct move!",
+    "restart": "Restarted the sequence.",
+    "wrong": "Wrong move -- sequence reset.",
+    "complete": "Sequence complete! Bonus awarded.",
+}
+_last_game_event_ts = 0.0
+
+
+def report_game_event(game, event, event_ts):
+    global _last_game_event_ts
+    if event is None or event_ts <= _last_game_event_ts:
+        return
+    _last_game_event_ts = event_ts
+    print("[GAME] %-9s Score: %-4d Rounds: %-3d Next: %s"
+          % (GAME_EVENT_TEXT.get(event, event), game["score"],
+             game["rounds_completed"], game["expected"]))
+
 
 def set_angle(joint_id, degrees):
     data.qpos[joint_id] = math.radians(degrees)
@@ -114,6 +133,10 @@ with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as vie
             if live_state is not None:
                 label = live_state.get("label", "NEUTRAL")
                 feats = live_state.get("features", {})
+                game = live_state.get("game")
+                if game is not None:
+                    report_game_event(game, live_state.get("game_event"),
+                                       live_state.get("game_event_ts", 0.0))
 
                 if label == "LEAN":
                     trunk_bend_angle = LEAN_MAX_DEG * feats.get("lean", 0.0)
