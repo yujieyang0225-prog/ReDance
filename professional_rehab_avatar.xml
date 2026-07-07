@@ -69,22 +69,21 @@
       </body>
 
       <body name="torso" pos="0 0 0.08">
-        <joint name="torso_bend" type="hinge" axis="1 0 0" range="-25 25" damping="2"/>
+        <joint name="torso_bend" type="hinge" axis="1 0 0" range="-110 25" damping="2"/>
         <joint name="torso_rotation" type="hinge" axis="0 0 1" range="-45 45" damping="2"/>
         <geom name="lower_torso" type="capsule" fromto="0 0 0.03 0 0 0.27" size="0.115" material="body"/>
         <geom name="upper_torso" type="capsule" fromto="-0.14 0 0.41 0.14 0 0.41" size="0.105" material="body"/>
 
-        <geom name="back_imu_sensor" type="box" pos="0 0.125 0.34" size="0.055 0.014 0.040" material="imu_blue"/>
+        <geom name="back_imu_sensor" type="box" pos="0 0.125 0.15" size="0.055 0.014 0.040" material="imu_blue"/>
 
         <body name="shoulders" pos="0 0 0.50">
           <geom name="shoulder_bar" type="capsule" fromto="-0.34 0 0 0.34 0 0" size="0.050" material="body_dark"/>
 
-          <geom name="left_shoulder_imu_sensor" type="box" pos="-0.32 -0.025 0.045" size="0.040 0.012 0.030" material="imu_blue"/>
-          <geom name="right_shoulder_imu_sensor" type="box" pos="0.32 -0.025 0.045" size="0.040 0.012 0.030" material="imu_blue"/>
-
+        
+          <geom name="upper_back_imu_sensor" type="box" pos="0 0.120 -0.099" size="0.055 0.014 0.040" material="imu_blue"/>
           <!-- LEFT ARM DOWN -->
           <body name="left_upper_arm" pos="-0.34 0 0">
-            <joint name="left_shoulder" type="hinge" axis="1 0 0" range="-20 20" damping="1"/>
+            <joint name="left_shoulder" type="hinge" axis="1 0 0" range="-90 90" damping="2"/>
             <geom name="left_upper_arm_geom" type="capsule" fromto="0 0 0 0 0 -0.32" size="0.045" material="body"/>
 
             <body name="left_elbow" pos="0 0 -0.32">
@@ -98,7 +97,7 @@
 
           <!-- RIGHT ARM DOWN -->
           <body name="right_upper_arm" pos="0.34 0 0">
-            <joint name="right_shoulder" type="hinge" axis="1 0 0" range="-20 20" damping="1"/>
+            <joint name="right_shoulder" type="hinge" axis="1 0 0" range="-90 90" damping="2"/>
             <geom name="right_upper_arm_geom" type="capsule" fromto="0 0 0 0 0 -0.32" size="0.045" material="body"/>
 
             <body name="right_elbow" pos="0 0 -0.32">

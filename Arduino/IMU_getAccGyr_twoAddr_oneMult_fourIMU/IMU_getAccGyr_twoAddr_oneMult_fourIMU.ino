@@ -142,13 +142,18 @@ void setup() {
 void loop() {
   pcaselect(0);
   myIMU0.readSensor();
-  xyzFloat aVal0 = myIMU0.getGValues();
-  xyzFloat gVal0 = myIMU0.getGyrValues();
+  xyzFloat aVal0;
+  xyzFloat gVal0;
+  myIMU0.getGValues(&aVal0);
+  myIMU0.getGyrValues(&gVal0);
   
 //  pcaselect(1);
   myIMU1.readSensor();
-  xyzFloat aVal1 = myIMU1.getGValues();
-  xyzFloat gVal1 = myIMU1.getGyrValues();
+  xyzFloat aVal1;
+  xyzFloat gVal1;
+  myIMU1.getGValues(&aVal1);
+  myIMU1.getGyrValues(&gVal1);
+
 
 //  pcaselect(2);
 //  myIMU2.readSensor();
@@ -157,13 +162,16 @@ void loop() {
 
   pcaselect(3);
   myIMU3.readSensor();
-  xyzFloat aVal3 = myIMU3.getGValues();
-  xyzFloat gVal3 = myIMU3.getGyrValues();
-
+  xyzFloat aVal3;
+  xyzFloat gVal3;
+  myIMU3.getGValues(&aVal3);
+  myIMU3.getGyrValues(&gVal3);
   pcaselect(4);
   myIMU4.readSensor();
-  xyzFloat aVal4 = myIMU4.getGValues();
-  xyzFloat gVal4 = myIMU4.getGyrValues();
+  xyzFloat aVal4;
+  xyzFloat gVal4;
+  myIMU4.getGValues(&aVal4);
+  myIMU4.getGyrValues(&gVal4);
 
   Serial.print("ax0:");
   Serial.print(aVal0.x);
