@@ -3,13 +3,13 @@ import sys
 import json
 import time
 import threading
+import argparse
 
 try:
     import serial
     import serial.tools.list_ports
 except ImportError:
-    print("pyserial not found in THIS Python. Install: pip install pyserial")
-    sys.exit(1)
+    serial = None
 
 from mapping import CHANNELS, parse_line, calibrate_neutral, MovementMapper
 from classify import (
@@ -49,6 +49,15 @@ EVENT_DISPLAY = {
 }
 EVENT_FLASH_SECONDS = 1.5
 
+SIM_KEY_TO_LABEL = {
+    "q": NEUTRAL,
+    "w": LEAN,
+    "e": LIFT_L,
+    "r": LIFT_R,
+    "t": TURN_LEFT,
+    "y": TURN_RIGHT,
+}
+
 
 def render_sequence_html(sequence, progress):
     parts = []
@@ -64,13 +73,130 @@ def render_sequence_html(sequence, progress):
     return "  →  ".join(parts)
 
 
+class SimulationClassifier(threading.Thread):
+    def __init__(self):
+        super().__init__(daemon=True)
+        self._stop_event = threading.Event()
+        self._lock = threading.Lock()
+
+        self.state = "calibrating"       # "calibrating" | "running"
+        self.progress = 0.0
+        self.label = NEUTRAL
+        self.features = {"lean": 0.0, "lift_L": 0.0,
+                         "lift_R": 0.0, "turn": 0.0}
+        self.error = None
+
+        self.game = SequenceGame()
+        self.game_event = None
+        self.game_event_ts = 0.0
+
+        self._calib_start = time.perf_counter()
+        self._last_write = 0.0
+
+    def open(self):
+        return None
+
+    def recalibrate(self):
+        with self._lock:
+            self.state = "calibrating"
+            self.progress = 0.0
+            self.label = NEUTRAL
+            self.features = {"lean": 0.0, "lift_L": 0.0,
+                             "lift_R": 0.0, "turn": 0.0}
+            self._calib_start = time.perf_counter()
+            self.game.reset_edge()
+
+    def handle_key(self, key):
+        key = key.lower()
+        label = SIM_KEY_TO_LABEL.get(key)
+        if label is None:
+            return
+        with self._lock:
+            if self.state != "running":
+                return
+            if label == NEUTRAL:
+                self.label = NEUTRAL
+            elif self.label == label:
+                self.label = NEUTRAL
+            else:
+                self.label = label
+            self.features = self._features_for_label(self.label)
+            if self.state == "running":
+                event = self.game.update(self.label)
+                if event is not None:
+                    self.game_event = event
+                    self.game_event_ts = time.time()
+
+    def _features_for_label(self, label):
+        if label == LEAN:
+            return {"lean": 1.0, "lift_L": 0.0, "lift_R": 0.0, "turn": 0.0}
+        if label == LIFT_L:
+            return {"lean": 0.0, "lift_L": 1.0, "lift_R": 0.0, "turn": 0.0}
+        if label == LIFT_R:
+            return {"lean": 0.0, "lift_L": 0.0, "lift_R": 1.0, "turn": 0.0}
+        if label == TURN_LEFT:
+            return {"lean": 0.0, "lift_L": 0.0, "lift_R": 0.0, "turn": -1.0}
+        if label == TURN_RIGHT:
+            return {"lean": 0.0, "lift_L": 0.0, "lift_R": 0.0, "turn": 1.0}
+        return {"lean": 0.0, "lift_L": 0.0, "lift_R": 0.0, "turn": 0.0}
+
+    def run(self):
+        while not self._stop_event.is_set():
+            now = time.perf_counter()
+            with self._lock:
+                if self.state == "calibrating":
+                    elapsed = now - self._calib_start
+                    self.progress = min(1.0, elapsed / CALIB_SECONDS)
+                    if elapsed >= CALIB_SECONDS:
+                        self.state = "running"
+                        self.progress = 1.0
+            self._write_state()
+            time.sleep(0.02)
+
+    def _write_state(self):
+        now = time.time()
+        if now - self._last_write < STATE_WRITE_INTERVAL:
+            return
+        self._last_write = now
+        with self._lock:
+            payload = {
+                "state": self.state,
+                "label": self.label,
+                "features": dict(self.features),
+                "game": self.game.snapshot(),
+                "game_event": self.game_event,
+                "game_event_ts": self.game_event_ts,
+                "ts": now,
+            }
+        tmp = STATE_FILE + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump(payload, f)
+            os.replace(tmp, STATE_FILE)
+        except OSError:
+            pass
+
+    def snapshot(self):
+        with self._lock:
+            return (self.state, self.progress, self.label,
+                    dict(self.features), self.error)
+
+    def game_snapshot(self):
+        with self._lock:
+            return self.game.snapshot(), self.game_event, self.game_event_ts
+
+    def stop(self):
+        self._stop_event.set()
+        self.join(timeout=3.0)
+
+
 class LiveClassifier(threading.Thread):
     def __init__(self, port, baud):
         super().__init__(daemon=True)
         self.port = port
         self.baud = baud
         self.ser = None
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
         self._lock = threading.Lock()
 
         self.state = "calibrating"       # "calibrating" | "running"
@@ -90,6 +216,8 @@ class LiveClassifier(threading.Thread):
         self._last_write = 0.0
 
     def open(self):
+        if serial is None:
+            raise RuntimeError("pyserial not found in THIS Python. Install: pip install pyserial")
         self.ser = serial.Serial(self.port, self.baud, timeout=1)
         time.sleep(2.0)
         self.ser.reset_input_buffer()
@@ -105,7 +233,7 @@ class LiveClassifier(threading.Thread):
             self.game.reset_edge()
 
     def run(self):
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             try:
                 raw = self.ser.readline()
             except Exception as exc:
@@ -188,48 +316,81 @@ class LiveClassifier(threading.Thread):
             return self.game.snapshot(), self.game_event, self.game_event_ts
 
     def stop(self):
-        self._stop.set()
+        self._stop_event.set()
         self.join(timeout=3.0)
         if self.ser is not None:
             self.ser.close()
 
 
 def list_ports():
+    if serial is None:
+        return []
     return [p.device for p in serial.tools.list_ports.comports()]
 
 
 def main():
-    if SERIAL_PORT not in list_ports():
-        print("Port", SERIAL_PORT, "not found. Available:")
-        for p in list_ports():
-            print("   ", p)
-        print("Set SERIAL_PORT at the top (macOS:  ls /dev/cu.*).")
-        sys.exit(1)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=("live", "simulate"), default="simulate")
+    args = parser.parse_args()
 
-    reader = LiveClassifier(SERIAL_PORT, BAUD)
-    try:
-        reader.open()
-    except Exception as exc:
-        print("Could not open serial:", exc)
-        sys.exit(1)
+    if args.mode == "simulate":
+        reader = SimulationClassifier()
+    else:
+        if SERIAL_PORT not in list_ports():
+            print("Port", SERIAL_PORT, "not found. Available:")
+            for p in list_ports():
+                print("   ", p)
+            print("Set SERIAL_PORT at the top (macOS:  ls /dev/cu.*).")
+            sys.exit(1)
+
+        reader = LiveClassifier(SERIAL_PORT, BAUD)
+        try:
+            reader.open()
+        except Exception as exc:
+            print("Could not open serial:", exc)
+            sys.exit(1)
     reader.start()
 
     import pyqtgraph as pg
     from pyqtgraph.Qt import QtWidgets, QtCore
 
     app = pg.mkQApp("Live action")
-    win = QtWidgets.QWidget()
-    win.setWindowTitle("Movement recognition")
+
+    class ControlWindow(QtWidgets.QWidget):
+        def __init__(self, input_reader, simulation_mode):
+            super().__init__()
+            self._reader = input_reader
+            self._simulation_mode = simulation_mode
+            self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+
+        def keyPressEvent(self, event):
+            if self._simulation_mode:
+                text = event.text().lower()
+                if text in SIM_KEY_TO_LABEL:
+                    self._reader.handle_key(text)
+                    event.accept()
+                    return
+            super().keyPressEvent(event)
+
+    win = ControlWindow(reader, args.mode == "simulate")
+    win.setWindowTitle("Movement recognition - simulation" if args.mode == "simulate" else "Movement recognition")
     win.resize(520, 440)
     win.setStyleSheet("background:#101216;")
     root = QtWidgets.QVBoxLayout(win)
     root.setContentsMargins(28, 28, 28, 28)
     root.setSpacing(16)
 
-    status = QtWidgets.QLabel("Hold still \u2014 calibrating\u2026")
+    status = QtWidgets.QLabel("Simulation mode: hold still \u2014 readying\u2026" if args.mode == "simulate" else "Hold still \u2014 calibrating\u2026")
     status.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
     status.setStyleSheet("color:#9aa0a8; font-size:15px;")
     root.addWidget(status)
+
+    if args.mode == "simulate":
+        hint = QtWidgets.QLabel("Keys: Q=neutral, W=lean, E=left lift, R=right lift, T=turn left, Y=turn right")
+        hint.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        hint.setStyleSheet("color:#7f8791; font-size:12px;")
+        hint.setWordWrap(True)
+        root.addWidget(hint)
 
     big = QtWidgets.QLabel("\u2014")
     big.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
@@ -274,7 +435,7 @@ def main():
     flash_label.setStyleSheet("font-size:13px; font-weight:600;")
     root.addWidget(flash_label)
 
-    btn = QtWidgets.QPushButton("Recalibrate (hold still)")
+    btn = QtWidgets.QPushButton("Recalibrate (restart simulation)" if args.mode == "simulate" else "Recalibrate (hold still)")
     btn.setStyleSheet(
         "QPushButton{color:#cfd3d8; background:#1c1f26; border:none;"
         "padding:9px; border-radius:8px; font-size:13px;}"
@@ -300,15 +461,18 @@ def main():
             flash_label.setText("")
         if state == "calibrating":
             remaining = max(0.0, CALIB_SECONDS * (1.0 - progress))
-            status.setText(
-                "Hold still \u2014 calibrating\u2026  %.1fs" % remaining)
+            if args.mode == "simulate":
+                status.setText("Simulation mode: readying\u2026  %.1fs" % remaining)
+            else:
+                status.setText(
+                    "Hold still \u2014 calibrating\u2026  %.1fs" % remaining)
             big.setText("\u2014")
             big.setStyleSheet(
                 "color:#8a8f98; font-size:46px; font-weight:700;")
             for b in bars.values():
                 b.setValue(0)
             return
-        status.setText("Recognizing movement")
+        status.setText("Simulation mode: recognized movement" if args.mode == "simulate" else "Recognizing movement")
         text, color = DISPLAY.get(label, (label, "#cfd3d8"))
         big.setText(text)
         big.setStyleSheet("color:%s; font-size:46px; font-weight:700;" % color)
@@ -323,6 +487,9 @@ def main():
 
     app.aboutToQuit.connect(reader.stop)
     win.show()
+    win.raise_()
+    win.activateWindow()
+    win.setFocus()
     pg.exec()
 
 
