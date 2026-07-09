@@ -49,6 +49,18 @@ EVENT_DISPLAY = {
 }
 EVENT_FLASH_SECONDS = 1.5
 
+VIDEO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "instruction_video.mp4")
+# Fill these with the real start/end timestamps from the instruction video.
+VIDEO_SEGMENTS_SECONDS = {
+    NEUTRAL: (0.0, 0.5),
+    LEAN: (0.5, 3.5),
+    TURN_LEFT: (3.5, 6.0),
+    LIFT_R: (6.0, 9.0),
+    TURN_RIGHT: (9.0, 12.0),
+    LIFT_L: (12.0, 13.0),
+}
+
 SIM_KEY_TO_LABEL = {
     "q": NEUTRAL,
     "w": LEAN,
@@ -353,8 +365,84 @@ def main():
 
     import pyqtgraph as pg
     from pyqtgraph.Qt import QtWidgets, QtCore
+    from PyQt6.QtCore import QUrl
+    from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
+    from PyQt6.QtMultimediaWidgets import QVideoWidget
 
     app = pg.mkQApp("Live action")
+
+    class InstructionVideoPlayer(QtWidgets.QWidget):
+        def __init__(self, video_path, segments):
+            super().__init__()
+            self._video_path = video_path
+            self._segments = segments
+            self._current_label = NEUTRAL
+            self._displayed_label = None
+            self._segment_start_ms = 0
+            self._segment_end_ms = 0
+
+            layout = QtWidgets.QVBoxLayout(self)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(8)
+
+            title = QtWidgets.QLabel("Instruction video")
+            title.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            title.setStyleSheet("color:#e5e7eb; font-size:16px; font-weight:700;")
+            layout.addWidget(title)
+
+            self._video_widget = QVideoWidget()
+            self._video_widget.setMinimumSize(420, 240)
+            self._video_widget.setStyleSheet("background:#000000;")
+            self._video_widget.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+            layout.addWidget(self._video_widget, stretch=1)
+
+            self._status = QtWidgets.QLabel()
+            self._status.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            self._status.setWordWrap(True)
+            self._status.setStyleSheet("color:#7f8791; font-size:12px;")
+            layout.addWidget(self._status)
+
+            self._player = QMediaPlayer(self)
+            self._audio = QAudioOutput(self)
+            self._audio.setMuted(True)
+            self._player.setAudioOutput(self._audio)
+            self._player.setVideoOutput(self._video_widget)
+            self._player.positionChanged.connect(self._on_position_changed)
+            self._player.mediaStatusChanged.connect(self._on_media_status_changed)
+
+            if os.path.exists(self._video_path):
+                self._player.setSource(QUrl.fromLocalFile(self._video_path))
+                self._status.setText("Looping will follow the current label.")
+            else:
+                self._status.setText("Video file not found: " + self._video_path)
+
+            self.set_label(NEUTRAL)
+
+        def set_label(self, label):
+            if label == self._displayed_label:
+                 return
+            self._displayed_label = label
+            self._current_label = label
+            start_s, end_s = self._segments.get(label, self._segments.get(NEUTRAL, (0.0, 0.0)))
+            self._segment_start_ms = int(start_s * 1000)
+            self._segment_end_ms = int(end_s * 1000)
+            if self._player.source().isEmpty():
+                self._status.setText("Video source unavailable for label: " + label)
+                return
+            self._status.setText("Looping: " + label)
+            self._player.setPosition(self._segment_start_ms)
+            self._player.play()
+
+        def _on_media_status_changed(self, status):
+            if status == QMediaPlayer.MediaStatus.LoadedMedia:
+                self._player.setPosition(self._segment_start_ms)
+                self._player.play()
+
+        def _on_position_changed(self, position):
+            if self._segment_end_ms <= self._segment_start_ms:
+                return
+            if position >= self._segment_end_ms:
+                self._player.setPosition(self._segment_start_ms)
 
     class ControlWindow(QtWidgets.QWidget):
         def __init__(self, input_reader, simulation_mode):
@@ -374,29 +462,40 @@ def main():
 
     win = ControlWindow(reader, args.mode == "simulate")
     win.setWindowTitle("Movement recognition - simulation" if args.mode == "simulate" else "Movement recognition")
-    win.resize(520, 440)
+    win.resize(1120, 560)
     win.setStyleSheet("background:#101216;")
-    root = QtWidgets.QVBoxLayout(win)
-    root.setContentsMargins(28, 28, 28, 28)
-    root.setSpacing(16)
+    root = QtWidgets.QHBoxLayout(win)
+    root.setContentsMargins(20, 20, 20, 20)
+    root.setSpacing(18)
+
+    left = QtWidgets.QVBoxLayout()
+    left.setSpacing(16)
+    root.addLayout(left, 3)
+
+    right = QtWidgets.QVBoxLayout()
+    right.setSpacing(10)
+    root.addLayout(right, 2)
+
+    video_panel = InstructionVideoPlayer(VIDEO_PATH, VIDEO_SEGMENTS_SECONDS)
+    right.addWidget(video_panel, stretch=1)
 
     status = QtWidgets.QLabel("Simulation mode: hold still \u2014 readying\u2026" if args.mode == "simulate" else "Hold still \u2014 calibrating\u2026")
     status.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
     status.setStyleSheet("color:#9aa0a8; font-size:15px;")
-    root.addWidget(status)
+    left.addWidget(status)
 
     if args.mode == "simulate":
         hint = QtWidgets.QLabel("Keys: Q=neutral, W=lean, E=left lift, R=right lift, T=turn left, Y=turn right")
         hint.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         hint.setStyleSheet("color:#7f8791; font-size:12px;")
         hint.setWordWrap(True)
-        root.addWidget(hint)
+        left.addWidget(hint)
 
     big = QtWidgets.QLabel("\u2014")
     big.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
     big.setStyleSheet("color:#8a8f98; font-size:46px; font-weight:700;")
     big.setWordWrap(True)
-    root.addWidget(big, stretch=1)
+    left.addWidget(big, stretch=1)
 
     bars = {}
     grid = QtWidgets.QGridLayout()
@@ -406,7 +505,6 @@ def main():
             ("lean", "Lean"), ("lift_L", "Lift L"),
             ("lift_R", "Lift R"), ("turn", "Turn")]):
         lab = QtWidgets.QLabel(name)
-        lab.setStyleSheet("color:#cfd3d8; font-size:13px;")
         bar = QtWidgets.QProgressBar()
         bar.setRange(0, 100)
         bar.setTextVisible(False)
@@ -417,23 +515,23 @@ def main():
         grid.addWidget(lab, r, 0)
         grid.addWidget(bar, r, 1)
         bars[key] = bar
-    root.addLayout(grid)
+    left.addLayout(grid)
 
     score_label = QtWidgets.QLabel("Score: 0   Rounds: 0")
     score_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
     score_label.setStyleSheet("color:#e5e7eb; font-size:18px; font-weight:700;")
-    root.addWidget(score_label)
+    left.addWidget(score_label)
 
     seq_label = QtWidgets.QLabel()
     seq_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
     seq_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
     seq_label.setStyleSheet("font-size:14px;")
-    root.addWidget(seq_label)
+    left.addWidget(seq_label)
 
     flash_label = QtWidgets.QLabel("")
     flash_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
     flash_label.setStyleSheet("font-size:13px; font-weight:600;")
-    root.addWidget(flash_label)
+    left.addWidget(flash_label)
 
     btn = QtWidgets.QPushButton("Recalibrate (restart simulation)" if args.mode == "simulate" else "Recalibrate (hold still)")
     btn.setStyleSheet(
@@ -441,7 +539,7 @@ def main():
         "padding:9px; border-radius:8px; font-size:13px;}"
         "QPushButton:hover{background:#262a33;}")
     btn.clicked.connect(reader.recalibrate)
-    root.addWidget(btn)
+    left.addWidget(btn)
 
     def update():
         state, progress, label, feats, error = reader.snapshot()
@@ -449,6 +547,7 @@ def main():
         if error is not None:
             status.setText("Serial error: " + error)
             return
+        video_panel.set_label(game["expected"])
         score_label.setText(
             "Score: %d   Rounds: %d" % (game["score"], game["rounds_completed"]))
         seq_label.setText(render_sequence_html(game["sequence"], game["progress"]))
