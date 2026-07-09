@@ -9,6 +9,12 @@ import mujoco.viewer
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "live_state.json")
 
+# Real-time joint angles published for live_action.py's "mujoco" mode, so it
+# can monitor and recognize whatever motion the avatar is currently doing.
+MOTION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "mujoco_motion.json")
+MOTION_WRITE_INTERVAL = 0.03  # seconds, throttles disk writes
+
 LEAN_MAX_DEG = 32
 LIFT_MAX_DEG = 35
 TURN_MAX_DEG = 45
@@ -24,8 +30,38 @@ right_hip_id = model.joint("right_hip_lift").qposadr[0]
 left_shoulder_id = model.joint("left_shoulder").qposadr[0]
 right_shoulder_id = model.joint("right_shoulder").qposadr[0]
 
-current_exercise = 0
-exercise_start_time = time.time()
+# All directions are in the AVATAR'S OWN body frame (its anatomical
+# left/right), matching what body-worn sensors will report. The default
+# camera faces the avatar, so the view is a mirror: the avatar's left
+# appears on the observer's right.
+# Positive torso_rotation (+z hinge) turns the avatar to ITS left.
+
+KEY_TO_ACTION = {
+    "1": "TURN_LEFT",
+    "2": "TURN_RIGHT",
+    "3": "LEAN",
+    "4": "LIFT_L",
+    "5": "LIFT_R",
+}
+
+ACTION_TEXT = {
+    "TURN_LEFT": "Trunk rotation LEFT",
+    "TURN_RIGHT": "Trunk rotation RIGHT",
+    "LEAN": "Trunk bending",
+    "LIFT_L": "LEFT leg raise",
+    "LIFT_R": "RIGHT leg raise",
+}
+
+# Each keypress queues ONE discrete repetition (neutral -> max -> neutral),
+# like a tester performing a required action once. Queued keys play back in
+# order, separated by a neutral gap so the classifier sees a clean edge
+# between consecutive moves.
+REP_SECONDS = 2.0
+REP_GAP_SECONDS = 0.4
+
+current_action = None        # (action, start_time) of the rep in progress
+action_queue = []
+last_rep_end = 0.0
 live_mode = False
 
 # Console feedback for the sequence game running inside live_action.py.
@@ -60,8 +96,35 @@ def read_live_state():
         return None
 
 
+_last_motion_write = 0.0
+
+
+def write_motion_state():
+    global _last_motion_write
+    now = time.time()
+    if now - _last_motion_write < MOTION_WRITE_INTERVAL:
+        return
+    _last_motion_write = now
+    payload = {
+        "angles": {
+            "torso_rotation": math.degrees(data.qpos[torso_rotation_id]),
+            "torso_bend": math.degrees(data.qpos[torso_bend_id]),
+            "left_hip": math.degrees(data.qpos[left_hip_id]),
+            "right_hip": math.degrees(data.qpos[right_hip_id]),
+        },
+        "ts": now,
+    }
+    tmp = MOTION_FILE + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(payload, f)
+        os.replace(tmp, MOTION_FILE)
+    except OSError:
+        pass
+
+
 def key_callback(keycode):
-    global current_exercise, exercise_start_time, live_mode
+    global live_mode, current_action, last_rep_end
 
     key = chr(keycode).lower() if 0 <= keycode < 256 else ""
 
@@ -70,49 +133,30 @@ def key_callback(keycode):
         print("Live sensor mode:", "ON (from live_action.py)" if live_mode else "OFF (keyboard demo)")
         return
 
+    if live_mode:
+        return
+
     if key == "0":
-        current_exercise = 0
-        exercise_start_time = time.time()
-        print("Exercise 0: Reset neutral")
+        action_queue.clear()
+        current_action = None
+        last_rep_end = 0.0
+        print("Reset: queue cleared, back to neutral")
 
-    elif key == "1":
-        current_exercise = 1
-        exercise_start_time = time.time()
-        print("Exercise 1: Trunk rotation LEFT")
-
-    elif key == "q":
-        current_exercise = 6
-        exercise_start_time = time.time()
-        print("Exercise Q: Trunk rotation RIGHT")
-
-    elif key == "2":
-        current_exercise = 2
-        exercise_start_time = time.time()
-        print("Exercise 2: Trunk bending")
-
-    elif key == "3":
-        current_exercise = 3
-        exercise_start_time = time.time()
-        print("Exercise 3: Left leg raise")
-
-    elif key == "4":
-        current_exercise = 4
-        exercise_start_time = time.time()
-        print("Exercise 4: Right leg raise")
-
-    elif key == "5":
-        current_exercise = 5
-        exercise_start_time = time.time()
-        print("Exercise 5: All movements")
+    elif key in KEY_TO_ACTION:
+        action = KEY_TO_ACTION[key]
+        action_queue.append(action)
+        print("Queued: %s  (%d pending)" % (ACTION_TEXT[action], len(action_queue)))
 
 
-print("Keyboard controls:")
+print("Keyboard controls (avatar's OWN left/right; mirror view on screen):")
 print("1 = Trunk rotation LEFT")
-print("Q = Trunk rotation RIGHT")
-print("2 = Trunk bending, larger ROM")
-print("3 = Left leg raise")
-print("4 = Right leg raise")
-print("0 = Reset neutral")
+print("2 = Trunk rotation RIGHT")
+print("3 = Trunk bending")
+print("4 = LEFT leg raise")
+print("5 = RIGHT leg raise")
+print("0 = Reset neutral / clear queue")
+print("Each key queues ONE repetition; press several keys to perform")
+print("a string of different actions in order, like a tester would.")
 print("L = Toggle LIVE sensor mode (mirrors live_action.py's IMU classifier)")
 print("Close the MuJoCo window to stop.")
 
@@ -120,8 +164,6 @@ with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as vie
     viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
 
     while viewer.is_running():
-        t = time.time() - exercise_start_time
-
         torso_rotation_angle = 0
         trunk_bend_angle = 0
         head_angle = 0
@@ -148,36 +190,46 @@ with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as vie
                     right_knee_lift = -LIFT_MAX_DEG * feats.get("lift_R", 0.0)
 
                 elif label == "TURN_LEFT":
-                    torso_rotation_angle = -TURN_MAX_DEG * abs(feats.get("turn", 0.0))
-                    head_angle = torso_rotation_angle
-
-                elif label == "TURN_RIGHT":
                     torso_rotation_angle = TURN_MAX_DEG * abs(feats.get("turn", 0.0))
                     head_angle = torso_rotation_angle
 
+                elif label == "TURN_RIGHT":
+                    torso_rotation_angle = -TURN_MAX_DEG * abs(feats.get("turn", 0.0))
+                    head_angle = torso_rotation_angle
+
         else:
-            # Smooth one-side movement: neutral -> max -> neutral
-            one_rep = max(0, math.sin(t * 1.2))
+            now = time.time()
+            if current_action is None and action_queue and \
+                    now - last_rep_end >= REP_GAP_SECONDS:
+                current_action = (action_queue.pop(0), now)
+                print("Performing:", ACTION_TEXT[current_action[0]])
 
-            if current_exercise == 1:
-                # Left only
-                torso_rotation_angle = -45 * one_rep
-                head_angle = torso_rotation_angle
+            if current_action is not None:
+                action, t0 = current_action
+                t = now - t0
+                if t >= REP_SECONDS:
+                    current_action = None
+                    last_rep_end = now
+                else:
+                    # One discrete repetition: neutral -> max -> neutral
+                    amp = math.sin(math.pi * t / REP_SECONDS)
 
-            elif current_exercise == 6:
-                # Right only
-                torso_rotation_angle = 45 * one_rep
-                head_angle = torso_rotation_angle
+                    if action == "TURN_LEFT":
+                        torso_rotation_angle = TURN_MAX_DEG * amp
+                        head_angle = torso_rotation_angle
 
-            elif current_exercise == 2:
-                # Larger trunk bending range of motion
-                trunk_bend_angle = 32 * one_rep
+                    elif action == "TURN_RIGHT":
+                        torso_rotation_angle = -TURN_MAX_DEG * amp
+                        head_angle = torso_rotation_angle
 
-            elif current_exercise == 3:
-                left_knee_lift = -35 * one_rep
+                    elif action == "LEAN":
+                        trunk_bend_angle = LEAN_MAX_DEG * amp
 
-            elif current_exercise == 4:
-                right_knee_lift = -35 * one_rep
+                    elif action == "LIFT_L":
+                        left_knee_lift = -LIFT_MAX_DEG * amp
+
+                    elif action == "LIFT_R":
+                        right_knee_lift = -LIFT_MAX_DEG * amp
 
         set_angle(torso_rotation_id, torso_rotation_angle)
         set_angle(torso_bend_id, trunk_bend_angle)
@@ -189,6 +241,7 @@ with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as vie
         set_angle(right_shoulder_id, 0)
 
         mujoco.mj_forward(model, data)
+        write_motion_state()
         viewer.sync()
 
         time.sleep(0.01)
