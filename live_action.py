@@ -11,7 +11,9 @@ try:
 except ImportError:
     serial = None
 
-from mapping import CHANNELS, parse_line, calibrate_neutral, MovementMapper
+from mapping import (
+    REQUIRED_CHANNELS, parse_line, calibrate_neutral, MovementMapper,
+)
 from classify import (
     ActionClassifier, NEUTRAL, LEAN, LIFT_L, LIFT_R, TURN_LEFT, TURN_RIGHT,
 )
@@ -435,7 +437,7 @@ class LiveClassifier(threading.Thread):
             if line == "":
                 continue
             _, values, ok = parse_line(line)
-            if not ok or not all(k in values for k in CHANNELS):
+            if not ok or not all(k in values for k in REQUIRED_CHANNELS):
                 continue
 
             with self._lock:

@@ -22,7 +22,7 @@ import glob
 import os
 
 from mapping import (
-    CHANNELS, parse_line, calibrate_neutral, MovementMapper,
+    REQUIRED_CHANNELS, parse_line, calibrate_neutral, MovementMapper,
 )
 
 NEUTRAL = "NEUTRAL"
@@ -80,7 +80,7 @@ def load_log(path):
         if line == "" or line.startswith("=~"):
             continue
         _, v, ok = parse_line(line)
-        if ok and all(k in v for k in CHANNELS):
+        if ok and all(k in v for k in REQUIRED_CHANNELS):
             out.append(v)
     return out
 

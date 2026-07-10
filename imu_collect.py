@@ -50,6 +50,15 @@ for i in range(5):
     s = str(i)
     CHANNELS += ["ax" + s, "ay" + s, "az" + s, "gx" + s, "gy" + s, "gz" + s]
 
+# The current 4-IMU firmware no longer sends IMU2; only these sensors are
+# needed by the recognition pipeline. Rows missing other channels are kept
+# (absent values recorded as empty), so the CSV format stays 5-IMU shaped.
+REQUIRED_CHANNELS = []
+for i in (0, 3, 4):                  # lumbar, thighL, thighR
+    s = str(i)
+    REQUIRED_CHANNELS += ["ax" + s, "ay" + s, "az" + s,
+                          "gx" + s, "gy" + s, "gz" + s]
+
 CSV_COLUMNS = ["t_esp_ms", "t_host_s"] + CHANNELS + ["emg", "fsr"]
 
 AXIS_COLORS = {"x": (220, 70, 70), "y": (70, 180, 90), "z": (80, 130, 230)}
@@ -145,14 +154,14 @@ class SerialReader(threading.Thread):
                 continue
 
             t_esp, values, ok = parse_line(line)
-            if not ok or not all(k in values for k in CHANNELS):
+            if not ok or not all(k in values for k in REQUIRED_CHANNELS):
                 self.dropped += 1
                 continue
 
             t_host = time.perf_counter() - start
 
             row = [t_esp if t_esp is not None else "", round(t_host, 4)]
-            row += [values[k] for k in CHANNELS]
+            row += [values.get(k, "") for k in CHANNELS]
             row += ["", ""]           # emg, fsr reserved
             self.writer.writerow(row)
             self._rows_since_flush += 1
@@ -164,7 +173,8 @@ class SerialReader(threading.Thread):
             with self._lock:
                 self.t_buf.append(t_plot)
                 for k in CHANNELS:
-                    self.ch_buf[k].append(values[k])
+                    # NaN keeps buffers aligned; pyqtgraph skips drawing it.
+                    self.ch_buf[k].append(values.get(k, float("nan")))
 
             self.kept += 1
             kept_since_status += 1

@@ -36,6 +36,17 @@ for _i in range(5):
     CHANNELS += ["ax" + _s, "ay" + _s, "az" +
                  _s, "gx" + _s, "gy" + _s, "gz" + _s]
 
+# The recognition pipeline only uses the lumbar and thigh IMUs. The current
+# hardware (IMU_getAccGyr_twoAddr_oneMult_fourIMU.ino) streams 4 IMUs and no
+# longer sends IMU2, so completeness checks must gate on these channels only.
+# Old 5-IMU logs are a superset and still pass.
+REQUIRED_IMUS = (LUMBAR, THIGH_L, THIGH_R)
+REQUIRED_CHANNELS = []
+for _i in REQUIRED_IMUS:
+    _s = str(_i)
+    REQUIRED_CHANNELS += ["ax" + _s, "ay" + _s, "az" +
+                          _s, "gx" + _s, "gy" + _s, "gz" + _s]
+
 
 def parse_line(line):
     # Returns (t_esp_ms_or_None, values_dict, ok). Same rule as imu_live.py:
