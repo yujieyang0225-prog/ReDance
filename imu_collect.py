@@ -26,7 +26,7 @@ ENABLE_GUI = True            # False = log only, no plotting
 OUTPUT_DIR = "logs"
 SESSION_ID = "session"
 ESP_VERSION = 2
-SENSOR_PLACEMENT = "IMU0 lumbar, IMU1 clavicleR, IMU2 clavicleL, IMU3 thighL, IMU4 thighR"
+SENSOR_PLACEMENT = "IMU0 lumbar, IMU1 cervical, IMU2 clavicleL, IMU3 thighL, IMU4 thighR"
 
 WINDOW_SAMPLES = 1500        # rolling buffer length (samples kept in memory)
 WINDOW_SEC = 15              # sliding view width: show the last N seconds
@@ -39,7 +39,7 @@ STATUS_EVERY_S = 5.0         # print kept/dropped + rate every N seconds
 # ---------------------------------------------------------------------------
 IMU_LABELS = [
     "IMU0 lumbar",
-    "IMU1 clavicleR",
+    "IMU1 cervical",
     "IMU2 clavicleL",
     "IMU3 thighL",
     "IMU4 thighR",
@@ -54,7 +54,7 @@ for i in range(5):
 # needed by the recognition pipeline. Rows missing other channels are kept
 # (absent values recorded as empty), so the CSV format stays 5-IMU shaped.
 REQUIRED_CHANNELS = []
-for i in (0, 3, 4):                  # lumbar, thighL, thighR
+for i in (0, 1, 3, 4):               # lumbar, cervical, thighL, thighR
     s = str(i)
     REQUIRED_CHANNELS += ["ax" + s, "ay" + s, "az" + s,
                           "gx" + s, "gy" + s, "gz" + s]

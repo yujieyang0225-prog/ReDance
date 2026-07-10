@@ -4,9 +4,10 @@
 # live stream or a replayed log/CSV.
 #
 # Sensor roles (validated against the labeled movement logs):
-#   IMU0 lumbar -> lean (accel tilt) + turn (yaw gyro)
-#   IMU3 thighL -> lift_L (accel tilt)
-#   IMU4 thighR -> lift_R (accel tilt)
+#   IMU0 lumbar   -> lean (accel tilt)
+#   IMU1 cervical -> turn (yaw gyro)
+#   IMU3 thighL   -> lift_L (accel tilt)
+#   IMU4 thighR   -> lift_R (accel tilt)
 #
 # Key principle proven by the data: the resting gravity axis is NOT fixed
 # (it sat on Y in one session, X in another). So the yaw gyro axis is
@@ -28,6 +29,7 @@ from dataclasses import dataclass, field, asdict
 # Shared parse contract (identical to the acquisition side)
 # ---------------------------------------------------------------------------
 LUMBAR = 0
+CERVICAL = 1
 THIGH_L = 3
 THIGH_R = 4
 
@@ -37,11 +39,11 @@ for _i in range(5):
     CHANNELS += ["ax" + _s, "ay" + _s, "az" +
                  _s, "gx" + _s, "gy" + _s, "gz" + _s]
 
-# The recognition pipeline only uses the lumbar and thigh IMUs. The current
-# hardware (IMU_getAccGyr_twoAddr_oneMult_fourIMU.ino) streams 4 IMUs and no
-# longer sends IMU2, so completeness checks must gate on these channels only.
-# Old 5-IMU logs are a superset and still pass.
-REQUIRED_IMUS = (LUMBAR, THIGH_L, THIGH_R)
+# The recognition pipeline uses the lumbar, cervical and thigh IMUs. The
+# current hardware (IMU_getAccGyr_twoAddr_oneMult_fourIMU.ino) streams these
+# 4 IMUs and no longer sends IMU2, so completeness checks must gate on these
+# channels only. Old 5-IMU logs are a superset and still pass.
+REQUIRED_IMUS = (LUMBAR, CERVICAL, THIGH_L, THIGH_R)
 REQUIRED_CHANNELS = []
 for _i in REQUIRED_IMUS:
     _s = str(_i)
@@ -147,10 +149,11 @@ def _median_vector(samples, imu):
 class Calibration:
     # neutral gravity directions (unit vectors)
     base_lumbar: tuple = (1.0, 0.0, 0.0)
+    base_cervical: tuple = (1.0, 0.0, 0.0)
     base_thighL: tuple = (0.0, 0.0, 1.0)
     base_thighR: tuple = (0.0, 0.0, 1.0)
 
-    # yaw gyro axis on the lumbar sensor: 0=gx, 1=gy, 2=gz (DETECTED)
+    # yaw gyro axis on the CERVICAL sensor: 0=gx, 1=gy, 2=gz (DETECTED)
     yaw_axis: int = 0
     yaw_sign: float = 1.0
 
@@ -174,14 +177,14 @@ class Calibration:
 
     def to_dict(self):
         d = asdict(self)
-        for k in ("base_lumbar", "base_thighL", "base_thighR"):
+        for k in ("base_lumbar", "base_cervical", "base_thighL", "base_thighR"):
             d[k] = list(d[k])
         return d
 
     @classmethod
     def from_dict(cls, d):
         d = dict(d)
-        for k in ("base_lumbar", "base_thighL", "base_thighR"):
+        for k in ("base_lumbar", "base_cervical", "base_thighL", "base_thighR"):
             if k in d:
                 d[k] = tuple(d[k])
         return cls(**d)
@@ -200,7 +203,7 @@ class Calibration:
         # output is patient-specific. movement in:
         #   "lean", "lift_L", "lift_R", "turn"
         if movement == "turn":
-            vals = sorted(abs(gyro_vector(v, LUMBAR)[
+            vals = sorted(abs(gyro_vector(v, CERVICAL)[
                           self.yaw_axis]) for v in samples)
             if vals:
                 self.turn_dps = max(
@@ -223,17 +226,20 @@ def calibrate_neutral(samples):
     # Builds baselines and auto-detects the yaw axis from the gravity vector.
     cal = Calibration()
     g_lumbar = _median_vector(samples, LUMBAR)
+    g_cervical = _median_vector(samples, CERVICAL)
     cal.base_lumbar = _unit(g_lumbar)
+    cal.base_cervical = _unit(g_cervical)
     cal.base_thighL = _unit(_median_vector(samples, THIGH_L))
     cal.base_thighR = _unit(_median_vector(samples, THIGH_R))
 
-    # yaw = rotation about gravity -> the gyro axis aligned with gravity
-    comps = [abs(g_lumbar[0]), abs(g_lumbar[1]), abs(g_lumbar[2])]
+    # yaw = rotation about gravity -> the CERVICAL gyro axis aligned with
+    # gravity (turn is measured at the neck)
+    comps = [abs(g_cervical[0]), abs(g_cervical[1]), abs(g_cervical[2])]
     cal.yaw_axis = comps.index(max(comps))
     # Accel reads +1g on the axis pointing UP; turning RIGHT is clockwise
     # seen from above = a NEGATIVE rate about that up axis (right-hand
     # rule). Flip the sign so positive turn = RIGHT (classify convention).
-    cal.yaw_sign = -1.0 if g_lumbar[cal.yaw_axis] >= 0 else 1.0
+    cal.yaw_sign = -1.0 if g_cervical[cal.yaw_axis] >= 0 else 1.0
     return cal
 
 
@@ -285,7 +291,7 @@ class MovementMapper:
         self._ema_liftL = self._ema(self._ema_liftL, tilt_thighL)
         self._ema_liftR = self._ema(self._ema_liftR, tilt_thighR)
 
-        yaw_raw = gyro_vector(sample, LUMBAR)[c.yaw_axis] * c.yaw_sign
+        yaw_raw = gyro_vector(sample, CERVICAL)[c.yaw_axis] * c.yaw_sign
         if yaw_raw != yaw_raw:           # NaN: sensor not delivering data
             yaw_raw = 0.0
         yaw_eff = 0.0 if abs(yaw_raw) < c.deadband_dps else yaw_raw
@@ -331,9 +337,11 @@ class MovementMapper:
 
 
 if __name__ == "__main__":
-    # tiny self-check with a fabricated neutral sample (gravity on lumbar X)
+    # tiny self-check with a fabricated neutral sample (gravity on lumbar
+    # and cervical X)
     neutral = {k: 0.0 for k in CHANNELS}
     neutral["ax0"] = 0.99
+    neutral["ax1"] = 0.99
     neutral["az3"] = 0.99
     neutral["az4"] = 0.99
     cal = calibrate_neutral([neutral] * 20)
