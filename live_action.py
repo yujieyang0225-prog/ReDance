@@ -220,7 +220,7 @@ class _IdentityMapper:
     # Adapter so ActionClassifier's gating and debounce rules run unchanged
     # on feature dicts that were computed from MuJoCo joint angles instead
     # of raw IMU channels.
-    def update(self, sample):
+    def update(self, sample, dt=None):
         return sample
 
 

@@ -21,6 +21,7 @@
 
 import json
 import math
+import time
 from dataclasses import dataclass, field, asdict
 
 # ---------------------------------------------------------------------------
@@ -152,7 +153,8 @@ class Calibration:
     # full-scale (defaults from log analysis; refine with fit_full_scale)
     lean_deg: float = 50.0
     lift_deg: float = 38.0
-    turn_dps: float = 25.0
+    turn_dps: float = 25.0          # legacy rate scale (kept for old configs)
+    turn_deg: float = 45.0          # full-scale INTEGRATED yaw angle
 
     # conditioning
     deadband_dps: float = 3.5
@@ -163,8 +165,8 @@ class Calibration:
     lean_off_deg: float = 15.0
     lift_on_deg: float = 12.0
     lift_off_deg: float = 8.0
-    turn_on_dps: float = 8.0
-    turn_off_dps: float = 4.0
+    turn_on_deg: float = 20.0       # on integrated yaw angle, like lean
+    turn_off_deg: float = 12.0
 
     def to_dict(self):
         d = asdict(self)
@@ -238,10 +240,13 @@ class MovementMapper:
         self._ema_lean = 0.0
         self._ema_liftL = 0.0
         self._ema_liftR = 0.0
+        self._yaw_angle_deg = 0.0    # integrated yaw ANGLE (holds a pose)
+        self._last_t = None
         self._lean_active = False
         self._liftL_active = False
         self._liftR_active = False
-        self._turn_active = False
+        self._turnL_active = False
+        self._turnR_active = False
 
     def _ema(self, prev, new):
         a = self.cal.ema_alpha
@@ -252,8 +257,16 @@ class MovementMapper:
             return value > off
         return value > on
 
-    def update(self, sample):
+    def update(self, sample, dt=None):
         c = self.cal
+
+        # dt: seconds since the previous sample, for yaw integration. Live
+        # streams leave it None (wall clock); offline replay passes the log's
+        # nominal sample interval so integration doesn't collapse to zero.
+        if dt is None:
+            now = time.monotonic()
+            dt = 0.0 if self._last_t is None else min(0.25, now - self._last_t)
+            self._last_t = now
 
         tilt_lumbar = tilt_angle_deg(
             accel_vector(sample, LUMBAR), c.base_lumbar)
@@ -271,10 +284,17 @@ class MovementMapper:
             yaw_raw = 0.0
         yaw_eff = 0.0 if abs(yaw_raw) < c.deadband_dps else yaw_raw
 
+        # Integrate rate -> angle so turn TRACKS THE POSE: turning left and
+        # holding keeps turn at its value (like lean holds its tilt). The
+        # deadband stops idle gyro drift from accumulating; clamping at
+        # full-scale keeps the unwind responsive when the patient turns back.
+        self._yaw_angle_deg = _clamp(
+            self._yaw_angle_deg + yaw_eff * dt, -c.turn_deg, c.turn_deg)
+
         lean = _clamp(self._ema_lean / c.lean_deg, 0.0, 1.0)
         lift_L = _clamp(self._ema_liftL / c.lift_deg, 0.0, 1.0)
         lift_R = _clamp(self._ema_liftR / c.lift_deg, 0.0, 1.0)
-        turn = _clamp(yaw_eff / c.turn_dps, -1.0, 1.0)
+        turn = _clamp(self._yaw_angle_deg / c.turn_deg, -1.0, 1.0)
 
         self._lean_active = self._hyst(self._lean_active, self._ema_lean,
                                        c.lean_on_deg, c.lean_off_deg)
@@ -282,8 +302,14 @@ class MovementMapper:
                                         c.lift_on_deg, c.lift_off_deg)
         self._liftR_active = self._hyst(self._liftR_active, self._ema_liftR,
                                         c.lift_on_deg, c.lift_off_deg)
-        self._turn_active = self._hyst(self._turn_active, abs(yaw_raw),
-                                       c.turn_on_dps, c.turn_off_dps)
+        # Split turn flags, hysteresis on the held angle exactly like lean.
+        # Convention: positive turn = RIGHT (matches classify.py).
+        self._turnL_active = self._hyst(self._turnL_active,
+                                        -self._yaw_angle_deg,
+                                        c.turn_on_deg, c.turn_off_deg)
+        self._turnR_active = self._hyst(self._turnR_active,
+                                        self._yaw_angle_deg,
+                                        c.turn_on_deg, c.turn_off_deg)
 
         return {
             "turn": turn,
@@ -293,7 +319,8 @@ class MovementMapper:
             "lean_active": self._lean_active,
             "liftL_active": self._liftL_active,
             "liftR_active": self._liftR_active,
-            "turn_active": self._turn_active,
+            "turnL_active": self._turnL_active,
+            "turnR_active": self._turnR_active,
         }
 
 

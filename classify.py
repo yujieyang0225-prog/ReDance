@@ -57,8 +57,8 @@ class ActionClassifier:
             return TURN_RIGHT if cs["turn"] > 0 else TURN_LEFT
         return NEUTRAL
 
-    def update(self, sample):
-        cs = self.mapper.update(sample)
+    def update(self, sample, dt=None):
+        cs = self.mapper.update(sample, dt)
         raw = self._raw_label(cs)
         if raw == self._candidate:
             self._count += 1
@@ -123,7 +123,9 @@ def evaluate(files):
         n_neutral = 0
         true = true_category(f)
         for v in s:
-            lab = clf.update(v)["label"]
+            # offline replay runs faster than real time; pass the stream's
+            # nominal sample interval so yaw integration stays correct
+            lab = clf.update(v, dt=1.0 / 38.0)["label"]
             counts[lab] = counts.get(lab, 0) + 1
             if lab == NEUTRAL:
                 n_neutral += 1
