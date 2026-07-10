@@ -162,6 +162,7 @@ class SimulationClassifier(threading.Thread):
 
         self._calib_start = time.perf_counter()
         self._last_write = 0.0
+        self._last_step_kind = None
 
     def open(self):
         return None
@@ -210,6 +211,7 @@ class SimulationClassifier(threading.Thread):
     def run(self):
         while not self._stop_event.is_set():
             now = time.perf_counter()
+            recalib_now = False
             with self._lock:
                 if self.state == "calibrating":
                     elapsed = now - self._calib_start
@@ -222,6 +224,12 @@ class SimulationClassifier(threading.Thread):
                     if event is not None:
                         self.game_event = event
                         self.game_event_ts = time.time()
+                    kind = self.game.current_kind()
+                    recalib_now = (kind == "calib"
+                                   and self._last_step_kind != "calib")
+                    self._last_step_kind = kind
+            if recalib_now:
+                self.recalibrate()   # takes the lock itself
             self._write_state()
             time.sleep(0.02)
 
@@ -299,6 +307,7 @@ class MujocoMotionClassifier(threading.Thread):
         self._calib_start = None
         self._last_ts = 0.0
         self._last_write = 0.0
+        self._last_step_kind = None
 
     def open(self):
         return None
@@ -385,12 +394,19 @@ class MujocoMotionClassifier(threading.Thread):
 
             # feed the game every cycle (not only on fresh frames) so
             # hold/timed routine steps keep progressing while still
+            recalib_now = False
             with self._lock:
                 if self.state == "running":
                     event = self.game.update(self.label, self.features)
                     if event is not None:
                         self.game_event = event
                         self.game_event_ts = time.time()
+                    kind = self.game.current_kind()
+                    recalib_now = (kind == "calib"
+                                   and self._last_step_kind != "calib")
+                    self._last_step_kind = kind
+            if recalib_now:
+                self.recalibrate()   # takes the lock itself
 
             self._write_state()
             time.sleep(0.02)
@@ -513,6 +529,7 @@ class LiveClassifier(threading.Thread):
             else:
                 out = self._classifier.update(values)
                 cs = out["features"]
+                recalib_now = False
                 with self._lock:
                     self.label = out["label"]
                     self.features = {
@@ -523,12 +540,14 @@ class LiveClassifier(threading.Thread):
                     if event is not None:
                         self.game_event = event
                         self.game_event_ts = time.time()
-                    # entering a routine calibration break: re-zero the
-                    # integrated turn angle so drift can't stack up
+                    # entering a routine calibration break: run the REAL
+                    # automatic recalibration (fresh neutral baseline)
                     kind = self.game.current_kind()
-                    if kind == "calib" and self._last_step_kind != "calib":
-                        self._classifier.mapper.reset_turn()
+                    recalib_now = (kind == "calib"
+                                   and self._last_step_kind != "calib")
                     self._last_step_kind = kind
+                if recalib_now:
+                    self.recalibrate()   # takes the lock itself
 
             self._write_state()
 

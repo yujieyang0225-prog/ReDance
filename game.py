@@ -46,10 +46,10 @@ def _timed(name, seconds):
 
 
 def _calib():
-    # A 3 s sit-still break between dance sections. Completing it awards
-    # POINTS_CALIB as a reward; live mode also re-zeros the turn integrator
-    # while it runs (see LiveClassifier), so drift can't pile up section
-    # after section.
+    # A 3 s sit-still break between dance sections. Entering it makes the
+    # classifier run a REAL automatic recalibration (fresh neutral baseline,
+    # same as the Recalibrate button; see the classifier threads in
+    # live_action.py). Completing the break awards POINTS_CALIB as a reward.
     return {"kind": "calib", "name": "Calibration - sit still",
             "seconds": CALIB_STEP_SECONDS}
 
@@ -131,6 +131,11 @@ class RoutineGame:
             self.rounds_completed += 1
             self._i = 0
             return "routine_complete"
+        if self.routine[self._i][1]["kind"] == "calib":
+            # start the break clock immediately: the classifier's automatic
+            # recalibration (~2 s, during which the game gets no updates)
+            # runs INSIDE the 3 s window instead of stretching it
+            self._timed_start = time.time()
         return "step_complete"
 
     def update(self, label, features=None):
