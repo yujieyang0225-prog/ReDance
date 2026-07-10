@@ -67,7 +67,6 @@ live_mode = False
 # Console feedback for the routine game running inside live_action.py.
 GAME_EVENT_TEXT = {
     "correct": "Correct move!",
-    "wrong": "Wrong move.",
     "calib_reward": "Calibrated!",
     "step_complete": "Step complete!",
     "routine_complete": "Congratulations - all passed! Bonus awarded.",

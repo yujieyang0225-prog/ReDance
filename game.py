@@ -187,7 +187,8 @@ class RoutineGame:
                     if self._count >= len(step["labels"]):
                         return self._advance()
                     return "correct"
-                return "wrong"
+                # a non-matching move is simply ignored -- no punishment,
+                # the player keeps their progress and tries again
             return None
 
         return None
@@ -214,7 +215,14 @@ class RoutineGame:
             next_name = self.routine[self._i + 1][1]["name"]
         else:
             next_name = "finish!"
+        if kind == "seq" and self._count < len(step["labels"]):
+            expected_label = step["labels"][self._count]
+        elif kind == "hold":
+            expected_label = step["label"]
+        else:
+            expected_label = None
         return {
+            "expected_label": expected_label,
             "phase": self._phase,
             "step_index": self._i + 1,
             "step_total": len(self.routine),

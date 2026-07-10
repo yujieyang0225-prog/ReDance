@@ -61,9 +61,9 @@ DISPLAY = {
 # how each game event is flashed: (text, color)
 EVENT_DISPLAY = {
     "correct": ("+%d" % POINTS_PER_REP, "#27ae60"),
-    "wrong": ("Wrong move — keep going", "#e74c3c"),
     "calib_reward": ("Calibrated!  +%d" % POINTS_CALIB, "#3b9ea5"),
-    "step_complete": ("Step complete!  +%d" % POINTS_STEP_COMPLETE, "#27ae60"),
+    "step_complete": ("★ Step complete!  +%d ★" % POINTS_STEP_COMPLETE,
+                      "#27ae60"),
     "routine_complete": ("Congratulations — all passed!  +%d bonus"
                          % BONUS_ON_COMPLETE, "#f1c40f"),
 }
@@ -80,7 +80,6 @@ EVENT_SOUNDS = {
     "routine_complete": ("fanfare.wav",
                          [(523.3, 0.12), (659.3, 0.12), (784.0, 0.12),
                           (1046.5, 0.30)]),
-    "wrong": ("wrong.wav", [(196.0, 0.20)]),
 }
 
 
@@ -651,18 +650,26 @@ def main():
 
     class ThresholdBar(QtWidgets.QProgressBar):
         # progress bar with a vertical marker at the classifier threshold:
-        # the movement counts once the fill crosses the line
+        # the movement counts once the fill crosses the line. The line turns
+        # green on the bar of the currently expected movement.
         def __init__(self, threshold):
             super().__init__()
             self._threshold = threshold
+            self._active = False
+
+        def set_active(self, active):
+            if active != self._active:
+                self._active = active
+                self.update()
 
         def paintEvent(self, ev):
             super().paintEvent(ev)
             p = QtGui.QPainter(self)
             x = max(1, min(self.width() - 2,
                            int(self.width() * self._threshold)))
-            pen = QtGui.QPen(QtGui.QColor("#e5e7eb"))
-            pen.setWidth(2)
+            pen = QtGui.QPen(
+                QtGui.QColor("#2ecc71" if self._active else "#e5e7eb"))
+            pen.setWidth(4 if self._active else 2)
             p.setPen(pen)
             p.drawLine(x, 1, x, self.height() - 2)
             p.end()
@@ -679,17 +686,21 @@ def main():
             self.hide()
             self._anim = None
 
-        def pop(self, text, color):
+        def pop(self, text, color, duration_ms=1200):
+            # Long pops (e.g. the 3 s calibration break) fade in fast, hold
+            # bright while gently rising, then fade out -- something to
+            # watch so the break doesn't feel idle.
             if self._anim is not None:
                 self._anim.stop()
             self.setText(text)
-            self.setStyleSheet("color:%s; font-size:26px; font-weight:800;"
-                               "background:transparent;" % color)
+            size = 30 if duration_ms >= 2000 else 26
+            self.setStyleSheet("color:%s; font-size:%dpx; font-weight:800;"
+                               "background:transparent;" % (color, size))
             self.adjustSize()
             x = (self.parent().width() - self.width()) // 2
             y0 = int(self.parent().height() * 0.45)
             y1 = int(self.parent().height() * 0.18)
-            self._fx.setOpacity(1.0)
+            self._fx.setOpacity(0.0)
             self.move(x, y0)
             self.show()
             self.raise_()
@@ -697,12 +708,14 @@ def main():
             rise = QtCore.QPropertyAnimation(self, b"pos", grp)
             rise.setStartValue(QtCore.QPoint(x, y0))
             rise.setEndValue(QtCore.QPoint(x, y1))
-            rise.setDuration(1200)
-            rise.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
+            rise.setDuration(duration_ms)
+            rise.setEasingCurve(QtCore.QEasingCurve.Type.InOutSine)
             fade = QtCore.QPropertyAnimation(self._fx, b"opacity", grp)
-            fade.setStartValue(1.0)
-            fade.setEndValue(0.0)
-            fade.setDuration(1200)
+            fade.setDuration(duration_ms)
+            fade.setKeyValueAt(0.0, 0.0)
+            fade.setKeyValueAt(0.08, 1.0)   # quick fade-in
+            fade.setKeyValueAt(0.75, 1.0)   # hold bright
+            fade.setKeyValueAt(1.0, 0.0)    # fade out
             grp.addAnimation(rise)
             grp.addAnimation(fade)
             grp.finished.connect(self.hide)
@@ -929,6 +942,13 @@ def main():
         score_label.setText(
             "Score: %d   Rounds: %d" % (game["score"], game["rounds_completed"]))
         seq_label.setText(render_routine_html(game))
+        # green threshold line on the bar of the currently expected movement
+        expected_bar = {
+            LEAN: "lean", LIFT_L: "lift_L", LIFT_R: "lift_R",
+            TURN_LEFT: "turn_L", TURN_RIGHT: "turn_R",
+        }.get(game.get("expected_label"))
+        for bar_key, b in bars.items():
+            b.set_active(bar_key == expected_bar)
         if event is not None and event_ts > handled_event_ts[0]:
             # fire achievement sound + floating animation ONCE per event
             handled_event_ts[0] = event_ts
@@ -936,7 +956,10 @@ def main():
             if eff is not None:
                 eff.play()
             text, color = EVENT_DISPLAY.get(event, (event, "#cfd3d8"))
-            reward_flash.pop(text, color)
+            # entering a calibration break: stretch the reward animation
+            # across the whole 3 s break so it never feels idle
+            long_pop = game.get("step_kind") == "calib"
+            reward_flash.pop(text, color, 3000 if long_pop else 1200)
         if event is not None and time.time() - event_ts < EVENT_FLASH_SECONDS:
             text, color = EVENT_DISPLAY.get(event, (event, "#cfd3d8"))
             flash_label.setText(text)
