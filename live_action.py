@@ -17,7 +17,10 @@ from mapping import (
 from classify import (
     ActionClassifier, NEUTRAL, LEAN, LIFT_L, LIFT_R, TURN_LEFT, TURN_RIGHT,
 )
-from game import SequenceGame, POINTS_PER_STEP, BONUS_ON_COMPLETE
+from game import (
+    RoutineGame, POINTS_PER_REP, POINTS_COMBO, POINTS_STEP_COMPLETE,
+    BONUS_ON_COMPLETE,
+)
 
 # ---------------------------------------------------------------------------
 # CONFIG
@@ -56,10 +59,12 @@ DISPLAY = {
 
 # how each game event is flashed: (text, color)
 EVENT_DISPLAY = {
-    "correct": ("+%d" % POINTS_PER_STEP, "#27ae60"),
-    "restart": ("Restarted the sequence  +%d" % POINTS_PER_STEP, "#f1c40f"),
-    "wrong": ("Wrong move — sequence reset", "#e74c3c"),
-    "complete": ("Sequence complete!  +%d bonus" % BONUS_ON_COMPLETE, "#f1c40f"),
+    "correct": ("+%d" % POINTS_PER_REP, "#27ae60"),
+    "combo": ("Combo!  +%d" % POINTS_COMBO, "#f1c40f"),
+    "wrong": ("Wrong move — keep going", "#e74c3c"),
+    "step_complete": ("Step complete!  +%d" % POINTS_STEP_COMPLETE, "#27ae60"),
+    "routine_complete": ("Routine complete!  +%d bonus" % BONUS_ON_COMPLETE,
+                         "#f1c40f"),
 }
 EVENT_FLASH_SECONDS = 1.5
 
@@ -85,18 +90,16 @@ SIM_KEY_TO_LABEL = {
 }
 
 
-def render_sequence_html(sequence, progress):
-    parts = []
-    for i, action in enumerate(sequence):
-        name = DISPLAY.get(action, (action, "#cfd3d8"))[0]
-        if i < progress:
-            color = "#27ae60"       # done
-        elif i == progress:
-            color = "#f1c40f"       # up next
-        else:
-            color = "#5a5f68"       # pending
-        parts.append('<span style="color:%s;">%s</span>' % (color, name))
-    return "  →  ".join(parts)
+def render_routine_html(game):
+    # Current phase + step with live progress, and a peek at the next step.
+    return (
+        '<span style="color:#f1c40f;">%s</span>'
+        '<span style="color:#5a5f68;">  ·  step %d/%d</span><br>'
+        '<span style="color:#e5e7eb; font-size:16px; font-weight:600;">%s</span>'
+        '  <span style="color:#27ae60;">%s</span><br>'
+        '<span style="color:#5a5f68;">next: %s</span>'
+        % (game["phase"], game["step_index"], game["step_total"],
+           game["step_name"], game["step_detail"], game["next_name"]))
 
 
 class SimulationClassifier(threading.Thread):
@@ -112,7 +115,7 @@ class SimulationClassifier(threading.Thread):
                          "lift_R": 0.0, "turn": 0.0}
         self.error = None
 
-        self.game = SequenceGame()
+        self.game = RoutineGame()
         self.game_event = None
         self.game_event_ts = 0.0
 
@@ -147,11 +150,8 @@ class SimulationClassifier(threading.Thread):
             else:
                 self.label = label
             self.features = self._features_for_label(self.label)
-            if self.state == "running":
-                event = self.game.update(self.label)
-                if event is not None:
-                    self.game_event = event
-                    self.game_event_ts = time.time()
+            # the game is fed continuously from run(), not per keypress,
+            # so hold/timed routine steps progress while nothing is pressed
 
     def _features_for_label(self, label):
         if label == LEAN:
@@ -176,6 +176,11 @@ class SimulationClassifier(threading.Thread):
                     if elapsed >= CALIB_SECONDS:
                         self.state = "running"
                         self.progress = 1.0
+                else:
+                    event = self.game.update(self.label, self.features)
+                    if event is not None:
+                        self.game_event = event
+                        self.game_event_ts = time.time()
             self._write_state()
             time.sleep(0.02)
 
@@ -243,7 +248,7 @@ class MujocoMotionClassifier(threading.Thread):
         self.error = None
         self.waiting = True              # no fresh MOTION_FILE data yet
 
-        self.game = SequenceGame()
+        self.game = RoutineGame()
         self.game_event = None
         self.game_event_ts = 0.0
 
@@ -336,10 +341,15 @@ class MujocoMotionClassifier(threading.Thread):
                     with self._lock:
                         self.label = out["label"]
                         self.features = dict(out["features"])
-                        event = self.game.update(out["label"])
-                        if event is not None:
-                            self.game_event = event
-                            self.game_event_ts = time.time()
+
+            # feed the game every cycle (not only on fresh frames) so
+            # hold/timed routine steps keep progressing while still
+            with self._lock:
+                if self.state == "running":
+                    event = self.game.update(self.label, self.features)
+                    if event is not None:
+                        self.game_event = event
+                        self.game_event_ts = time.time()
 
             self._write_state()
             time.sleep(0.02)
@@ -397,7 +407,7 @@ class LiveClassifier(threading.Thread):
                          "lift_R": 0.0, "turn": 0.0}
         self.error = None
 
-        self.game = SequenceGame()
+        self.game = RoutineGame()
         self.game_event = None
         self.game_event_ts = 0.0
 
@@ -467,7 +477,7 @@ class LiveClassifier(threading.Thread):
                         "lean": cs["lean"], "lift_L": cs["lift_L"],
                         "lift_R": cs["lift_R"], "turn": cs["turn"],
                     }
-                    event = self.game.update(out["label"])
+                    event = self.game.update(out["label"], self.features)
                     if event is not None:
                         self.game_event = event
                         self.game_event_ts = time.time()
@@ -765,7 +775,7 @@ def main():
         video_panel.set_label(game["expected"])
         score_label.setText(
             "Score: %d   Rounds: %d" % (game["score"], game["rounds_completed"]))
-        seq_label.setText(render_sequence_html(game["sequence"], game["progress"]))
+        seq_label.setText(render_routine_html(game))
         if event is not None and time.time() - event_ts < EVENT_FLASH_SECONDS:
             text, color = EVENT_DISPLAY.get(event, (event, "#cfd3d8"))
             flash_label.setText(text)

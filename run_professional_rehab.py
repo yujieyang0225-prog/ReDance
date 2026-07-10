@@ -64,12 +64,13 @@ action_queue = []
 last_rep_end = 0.0
 live_mode = False
 
-# Console feedback for the sequence game running inside live_action.py.
+# Console feedback for the routine game running inside live_action.py.
 GAME_EVENT_TEXT = {
     "correct": "Correct move!",
-    "restart": "Restarted the sequence.",
-    "wrong": "Wrong move -- sequence reset.",
-    "complete": "Sequence complete! Bonus awarded.",
+    "combo": "Combo move!",
+    "wrong": "Wrong move.",
+    "step_complete": "Step complete!",
+    "routine_complete": "Routine complete! Bonus awarded.",
 }
 _last_game_event_ts = 0.0
 
@@ -79,7 +80,7 @@ def report_game_event(game, event, event_ts):
     if event is None or event_ts <= _last_game_event_ts:
         return
     _last_game_event_ts = event_ts
-    print("[GAME] %-9s Score: %-4d Rounds: %-3d Next: %s"
+    print("[GAME] %-9s Score: %-4d Rounds: %-3d Step: %s"
           % (GAME_EVENT_TEXT.get(event, event), game["score"],
              game["rounds_completed"], game["expected"]))
 
