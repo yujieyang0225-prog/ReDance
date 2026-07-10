@@ -110,6 +110,10 @@ def ensure_event_sounds():
 
 VIDEO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "instruction_video.mp4")
+# Background music: loops from game start until the window is closed.
+MUSIC_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "rehab_music.mp3")
+MUSIC_VOLUME = 0.35   # low enough that the achievement chimes cut through
 # Video segment timestamps live in game.py's ROUTINE: each step carries its
 # own (start_s, stop_s), and the panel loops whatever the current step says.
 
@@ -627,6 +631,21 @@ def main():
     from PyQt6.QtMultimediaWidgets import QVideoWidget
 
     app = pg.mkQApp("Live action")
+
+    # background music: loops for the whole session, ends with the window
+    music_player = None
+    music_audio = None
+    if os.path.exists(MUSIC_PATH):
+        try:
+            music_player = QMediaPlayer()
+            music_audio = QAudioOutput()
+            music_audio.setVolume(MUSIC_VOLUME)
+            music_player.setAudioOutput(music_audio)
+            music_player.setSource(QUrl.fromLocalFile(MUSIC_PATH))
+            music_player.setLoops(QMediaPlayer.Loops.Infinite)
+            music_player.play()
+        except Exception:
+            music_player = None
 
     # achievement sounds (synthesized on first run); disabled on any failure
     sound_effects = {}
