@@ -33,16 +33,19 @@ BONUS_ON_COMPLETE = 100
 CALIB_STEP_SECONDS = 3.0
 
 
-def _hold(name, label, seconds):
-    return {"kind": "hold", "name": name, "label": label, "seconds": seconds}
+def _hold(name, label, seconds, video=None):
+    return {"kind": "hold", "name": name, "label": label,
+            "seconds": seconds, "video": video}
 
 
-def _seq(name, labels):
-    return {"kind": "seq", "name": name, "labels": tuple(labels)}
+def _seq(name, labels, video=None):
+    return {"kind": "seq", "name": name, "labels": tuple(labels),
+            "video": video}
 
 
-def _timed(name, seconds):
-    return {"kind": "timed", "name": name, "seconds": seconds}
+def _timed(name, seconds, video=None):
+    return {"kind": "timed", "name": name, "seconds": seconds,
+            "video": video}
 
 
 def _calib():
@@ -50,41 +53,47 @@ def _calib():
     # classifier run a REAL automatic recalibration (fresh neutral baseline,
     # same as the Recalibrate button; see the classifier threads in
     # live_action.py). Completing the break awards POINTS_CALIB as a reward.
+    # No video: the instruction video pauses while the player sits still.
     return {"kind": "calib", "name": "Calibration - sit still",
-            "seconds": CALIB_STEP_SECONDS}
+            "seconds": CALIB_STEP_SECONDS, "video": None}
 
 
 TIPTOES = (LIFT_L, LIFT_R, LIFT_L, LIFT_R, LIFT_L, LIFT_R)
 
+# Each step carries its own instruction-video segment (start_s, stop_s), so
+# repeated step names (Tip Toes, Trunk Flex, ...) loop their OWN part of the
+# video. Timestamps from the choreography video cut list.
 ROUTINE = [
     # ----- Warmup -----
-    ("Warmup", _hold("Baseline", NEUTRAL, 10.0)),
-    ("Warmup", _timed("Foot Rotate", 20.0)),
-    ("Warmup", _timed("Reach-Over", 20.0)),
+    ("Warmup", _hold("Baseline", NEUTRAL, 10.0, video=(0.0, 2.0))),
+    ("Warmup", _timed("Foot Rotate", 20.0, video=(2.0, 17.0))),
+    ("Warmup", _timed("Reach-Over", 20.0, video=(17.0, 27.0))),
     # ----- Dance (3 s calibration reward between sections) -----
-    ("Dance", _seq("Tip Toes", TIPTOES)),
+    ("Dance", _seq("Tip Toes", TIPTOES, video=(27.0, 37.0))),
     ("Dance", _calib()),
-    ("Dance", _seq("Lift off R", (LIFT_R,) * 3)),
+    ("Dance", _seq("Lift off R", (LIFT_R,) * 3, video=(28.0, 29.0))),
     ("Dance", _calib()),
-    ("Dance", _seq("Lift off L", (LIFT_L,) * 3)),
+    ("Dance", _seq("Lift off L", (LIFT_L,) * 3, video=(29.0, 30.0))),
     ("Dance", _calib()),
-    ("Dance", _seq("Babysteps", (LIFT_L,) * 3)),
+    ("Dance", _seq("Babysteps", (LIFT_L,) * 3, video=(37.0, 40.0))),
     ("Dance", _calib()),
-    ("Dance", _seq("Trunk Flex", (LEAN, LEAN))),
+    ("Dance", _seq("Trunk Flex", (LEAN, LEAN), video=(40.0, 47.0))),
     ("Dance", _calib()),
-    ("Dance", _seq("Trunk Flex", (LEAN, LEAN))),
+    ("Dance", _seq("Trunk Flex", (LEAN, LEAN), video=(47.0, 53.0))),
     ("Dance", _calib()),
-    ("Dance", _seq("Trunk Rotate", (TURN_LEFT, TURN_RIGHT))),
+    ("Dance", _seq("Trunk Rotate", (TURN_LEFT, TURN_RIGHT),
+                   video=(53.0, 59.0))),
     ("Dance", _calib()),
-    ("Dance", _seq("Tip Toes", TIPTOES)),
+    ("Dance", _seq("Tip Toes", TIPTOES, video=(59.0, 67.0))),
     ("Dance", _calib()),
-    ("Dance", _seq("Trunk Flex", (LEAN, LEAN))),
+    ("Dance", _seq("Trunk Flex", (LEAN, LEAN), video=(67.0, 74.0))),
     ("Dance", _calib()),
-    ("Dance", _seq("Trunk Flex", (LEAN, LEAN))),
+    ("Dance", _seq("Trunk Flex", (LEAN, LEAN), video=(74.0, 80.0))),
     ("Dance", _calib()),
-    ("Dance", _seq("Trunk Rotate", (TURN_LEFT, TURN_RIGHT))),
+    ("Dance", _seq("Trunk Rotate", (TURN_LEFT, TURN_RIGHT),
+                   video=(80.0, 87.0))),
     ("Dance", _calib()),
-    ("Dance", _seq("Babysteps", (LIFT_R,) * 3)),
+    ("Dance", _seq("Babysteps", (LIFT_R,) * 3, video=(93.0, 100.0))),
 ]
 
 
@@ -223,6 +232,7 @@ class RoutineGame:
             expected_label = None
         return {
             "expected_label": expected_label,
+            "video_segment": step.get("video"),
             "phase": self._phase,
             "step_index": self._i + 1,
             "step_total": len(self.routine),

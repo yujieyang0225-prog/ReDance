@@ -110,15 +110,8 @@ def ensure_event_sounds():
 
 VIDEO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "instruction_video.mp4")
-# Fill these with the real start/end timestamps from the instruction video.
-VIDEO_SEGMENTS_SECONDS = {
-    NEUTRAL: (0.0, 0.5),
-    LEAN: (0.5, 3.5),
-    TURN_LEFT: (3.5, 6.0),
-    LIFT_R: (6.0, 9.0),
-    TURN_RIGHT: (9.0, 12.0),
-    LIFT_L: (12.0, 13.0),
-}
+# Video segment timestamps live in game.py's ROUTINE: each step carries its
+# own (start_s, stop_s), and the panel loops whatever the current step says.
 
 SIM_KEY_TO_LABEL = {
     "q": NEUTRAL,
@@ -723,12 +716,13 @@ def main():
             grp.start()
 
     class InstructionVideoPlayer(QtWidgets.QWidget):
-        def __init__(self, video_path, segments):
+        # Loops the video segment attached to the CURRENT ROUTINE STEP
+        # (game.py defines start/stop per step), so repeated step names
+        # each play their own part of the choreography video.
+        def __init__(self, video_path):
             super().__init__()
             self._video_path = video_path
-            self._segments = segments
-            self._current_label = NEUTRAL
-            self._displayed_label = None
+            self._displayed_key = None
             self._segment_start_ms = 0
             self._segment_end_ms = 0
 
@@ -763,24 +757,30 @@ def main():
 
             if os.path.exists(self._video_path):
                 self._player.setSource(QUrl.fromLocalFile(self._video_path))
-                self._status.setText("Looping will follow the current label.")
+                self._status.setText("Looping will follow the routine step.")
             else:
                 self._status.setText("Video file not found: " + self._video_path)
 
-            self.set_label(NEUTRAL)
-
-        def set_label(self, label):
-            if label == self._displayed_label:
-                 return
-            self._displayed_label = label
-            self._current_label = label
-            start_s, end_s = self._segments.get(label, self._segments.get(NEUTRAL, (0.0, 0.0)))
+        def set_segment(self, name, segment):
+            # segment: (start_s, stop_s) from the routine step, or None to
+            # pause (calibration breaks)
+            key = (name, segment)
+            if key == self._displayed_key:
+                return
+            self._displayed_key = key
+            if segment is None:
+                self._segment_start_ms = 0
+                self._segment_end_ms = 0
+                self._player.pause()
+                self._status.setText("Video paused: " + name)
+                return
+            start_s, end_s = segment
             self._segment_start_ms = int(start_s * 1000)
             self._segment_end_ms = int(end_s * 1000)
             if self._player.source().isEmpty():
-                self._status.setText("Video source unavailable for label: " + label)
+                self._status.setText("Video source unavailable")
                 return
-            self._status.setText("Looping: " + label)
+            self._status.setText("Looping: " + name)
             self._player.setPosition(self._segment_start_ms)
             self._player.play()
 
@@ -833,7 +833,7 @@ def main():
     right.setSpacing(10)
     root.addLayout(right, 2)
 
-    video_panel = InstructionVideoPlayer(VIDEO_PATH, VIDEO_SEGMENTS_SECONDS)
+    video_panel = InstructionVideoPlayer(VIDEO_PATH)
     right.addWidget(video_panel, stretch=1)
 
     if args.mode == "simulate":
@@ -938,7 +938,7 @@ def main():
             status.setText(
                 "Waiting for MuJoCo motion — start run_professional_rehab.py")
             return
-        video_panel.set_label(game["expected"])
+        video_panel.set_segment(game["step_name"], game.get("video_segment"))
         score_label.setText(
             "Score: %d   Rounds: %d" % (game["score"], game["rounds_completed"]))
         seq_label.setText(render_routine_html(game))
