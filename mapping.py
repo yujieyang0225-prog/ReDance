@@ -109,11 +109,15 @@ def _clamp(x, lo, hi):
 def tilt_angle_deg(acc, base_unit):
     # Angle between the current gravity direction and the neutral one.
     # Mounting-agnostic: no per-axis bookkeeping, drift-free.
+    if _norm(acc) < 0.05 or _norm(base_unit) < 0.5:
+        # All-zero (mux/cable outage) or zero baseline: the sensor is not
+        # delivering data. Report no tilt instead of a bogus 90 degrees
+        # that pegs the lift at full scale.
+        return 0.0
     au = _unit(acc)
     d = au[0] * base_unit[0] + au[1] * base_unit[1] + au[2] * base_unit[2]
     if d != d:
-        # NaN: the sensor is not delivering data (e.g. failed init, loose
-        # cable). Report no tilt instead of poisoning the whole pipeline.
+        # NaN: same story (e.g. failed init mid-stream).
         return 0.0
     return math.degrees(math.acos(_clamp(d, -1.0, 1.0)))
 
@@ -226,8 +230,10 @@ def calibrate_neutral(samples):
     # yaw = rotation about gravity -> the gyro axis aligned with gravity
     comps = [abs(g_lumbar[0]), abs(g_lumbar[1]), abs(g_lumbar[2])]
     cal.yaw_axis = comps.index(max(comps))
-    # sign so that gravity component is positive keeps a consistent convention
-    cal.yaw_sign = 1.0 if g_lumbar[cal.yaw_axis] >= 0 else -1.0
+    # Accel reads +1g on the axis pointing UP; turning RIGHT is clockwise
+    # seen from above = a NEGATIVE rate about that up axis (right-hand
+    # rule). Flip the sign so positive turn = RIGHT (classify convention).
+    cal.yaw_sign = -1.0 if g_lumbar[cal.yaw_axis] >= 0 else 1.0
     return cal
 
 
