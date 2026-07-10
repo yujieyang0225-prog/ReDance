@@ -588,6 +588,12 @@ def main():
     elif args.mode == "mujoco":
         reader = MujocoMotionClassifier()
     else:
+        # the board may still be (re-)enumerating -- USB serial ports can
+        # flap for a few seconds after plugging in; wait instead of dying
+        _deadline = time.time() + 15.0
+        while SERIAL_PORT not in list_ports() and time.time() < _deadline:
+            print("Waiting for", SERIAL_PORT, "to enumerate...")
+            time.sleep(1.0)
         if SERIAL_PORT not in list_ports():
             print("Port", SERIAL_PORT, "not found. Available:")
             for p in list_ports():
