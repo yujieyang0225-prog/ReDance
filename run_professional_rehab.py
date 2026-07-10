@@ -68,8 +68,9 @@ live_mode = False
 GAME_EVENT_TEXT = {
     "correct": "Correct move!",
     "wrong": "Wrong move.",
+    "calib_reward": "Calibrated!",
     "step_complete": "Step complete!",
-    "routine_complete": "Routine complete! Bonus awarded.",
+    "routine_complete": "Congratulations - all passed! Bonus awarded.",
 }
 _last_game_event_ts = 0.0
 

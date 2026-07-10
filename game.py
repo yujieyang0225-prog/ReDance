@@ -26,8 +26,11 @@ TURN_LEFT = "TURN_LEFT"
 TURN_RIGHT = "TURN_RIGHT"
 
 POINTS_PER_REP = 10
+POINTS_CALIB = 10
 POINTS_STEP_COMPLETE = 20
 BONUS_ON_COMPLETE = 100
+
+CALIB_STEP_SECONDS = 3.0
 
 
 def _hold(name, label, seconds):
@@ -42,6 +45,15 @@ def _timed(name, seconds):
     return {"kind": "timed", "name": name, "seconds": seconds}
 
 
+def _calib():
+    # A 3 s sit-still break between dance sections. Completing it awards
+    # POINTS_CALIB as a reward; live mode also re-zeros the turn integrator
+    # while it runs (see LiveClassifier), so drift can't pile up section
+    # after section.
+    return {"kind": "calib", "name": "Calibration - sit still",
+            "seconds": CALIB_STEP_SECONDS}
+
+
 TIPTOES = (LIFT_L, LIFT_R, LIFT_L, LIFT_R, LIFT_L, LIFT_R)
 
 ROUTINE = [
@@ -49,18 +61,29 @@ ROUTINE = [
     ("Warmup", _hold("Baseline", NEUTRAL, 10.0)),
     ("Warmup", _timed("Foot Rotate", 20.0)),
     ("Warmup", _timed("Reach-Over", 20.0)),
-    # ----- Dance -----
+    # ----- Dance (3 s calibration reward between sections) -----
     ("Dance", _seq("Tip Toes", TIPTOES)),
+    ("Dance", _calib()),
     ("Dance", _seq("Lift off R", (LIFT_R,) * 3)),
+    ("Dance", _calib()),
     ("Dance", _seq("Lift off L", (LIFT_L,) * 3)),
+    ("Dance", _calib()),
     ("Dance", _seq("Babysteps", (LIFT_L,) * 3)),
+    ("Dance", _calib()),
     ("Dance", _seq("Trunk Flex", (LEAN, LEAN))),
+    ("Dance", _calib()),
     ("Dance", _seq("Trunk Flex", (LEAN, LEAN))),
+    ("Dance", _calib()),
     ("Dance", _seq("Trunk Rotate", (TURN_LEFT, TURN_RIGHT))),
+    ("Dance", _calib()),
     ("Dance", _seq("Tip Toes", TIPTOES)),
+    ("Dance", _calib()),
     ("Dance", _seq("Trunk Flex", (LEAN, LEAN))),
+    ("Dance", _calib()),
     ("Dance", _seq("Trunk Flex", (LEAN, LEAN))),
+    ("Dance", _calib()),
     ("Dance", _seq("Trunk Rotate", (TURN_LEFT, TURN_RIGHT))),
+    ("Dance", _calib()),
     ("Dance", _seq("Babysteps", (LIFT_R,) * 3)),
 ]
 
@@ -87,6 +110,9 @@ class RoutineGame:
     @property
     def expected(self):
         return self._step["name"]
+
+    def current_kind(self):
+        return self._step["kind"]
 
     def reset_edge(self):
         # Call after a recalibration so the next label isn't mistaken for
@@ -134,6 +160,20 @@ class RoutineGame:
                 return self._advance()
             return None
 
+        if kind == "calib":
+            if self._timed_start is None:
+                self._timed_start = now
+            if now - self._timed_start >= step["seconds"]:
+                # reward instead of the regular step bonus; a calib break
+                # is never the final step, so no round handling needed
+                self.score += POINTS_CALIB
+                self._i += 1
+                self._count = 0
+                self._hold_start = None
+                self._timed_start = None
+                return "calib_reward"
+            return None
+
         if kind == "seq":
             if is_move:
                 if label == step["labels"][self._count]:
@@ -156,7 +196,7 @@ class RoutineGame:
             detail = "hold  %.0f / %.0f s" % (min(elapsed, step["seconds"]),
                                               step["seconds"])
             progress = min(1.0, elapsed / step["seconds"])
-        elif kind == "timed":
+        elif kind in ("timed", "calib"):
             elapsed = 0.0 if self._timed_start is None else now - self._timed_start
             detail = "%.0f s left" % max(0.0, step["seconds"] - elapsed)
             progress = min(1.0, elapsed / step["seconds"])

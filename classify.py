@@ -32,9 +32,14 @@ LIFT_R = "LIFT_R"
 TURN_LEFT = "TURN_LEFT"
 TURN_RIGHT = "TURN_RIGHT"
 
+# decision thresholds on the normalized features; the GUI draws these as
+# threshold lines on the feature bars
+TILT_GATE = 0.45
+TURN_GATE = 0.35
+
 
 class ActionClassifier:
-    def __init__(self, mapper, tilt_gate=0.45, turn_gate=0.35,
+    def __init__(self, mapper, tilt_gate=TILT_GATE, turn_gate=TURN_GATE,
                  turn_presence=0.20, debounce=5):
         self.mapper = mapper
         self.tilt_gate = tilt_gate

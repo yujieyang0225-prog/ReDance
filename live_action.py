@@ -16,9 +16,11 @@ from mapping import (
 )
 from classify import (
     ActionClassifier, NEUTRAL, LEAN, LIFT_L, LIFT_R, TURN_LEFT, TURN_RIGHT,
+    TILT_GATE, TURN_GATE,
 )
 from game import (
-    RoutineGame, POINTS_PER_REP, POINTS_STEP_COMPLETE, BONUS_ON_COMPLETE,
+    RoutineGame, POINTS_PER_REP, POINTS_CALIB, POINTS_STEP_COMPLETE,
+    BONUS_ON_COMPLETE,
 )
 
 # ---------------------------------------------------------------------------
@@ -60,11 +62,52 @@ DISPLAY = {
 EVENT_DISPLAY = {
     "correct": ("+%d" % POINTS_PER_REP, "#27ae60"),
     "wrong": ("Wrong move — keep going", "#e74c3c"),
+    "calib_reward": ("Calibrated!  +%d" % POINTS_CALIB, "#3b9ea5"),
     "step_complete": ("Step complete!  +%d" % POINTS_STEP_COMPLETE, "#27ae60"),
-    "routine_complete": ("Routine complete!  +%d bonus" % BONUS_ON_COMPLETE,
-                         "#f1c40f"),
+    "routine_complete": ("Congratulations — all passed!  +%d bonus"
+                         % BONUS_ON_COMPLETE, "#f1c40f"),
 }
 EVENT_FLASH_SECONDS = 1.5
+
+# Achievement sounds: short chimes synthesized to WAV on first run, so the
+# repo needs no binary audio assets. event -> (filename, [(freq_hz, dur_s)])
+SOUND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sounds")
+EVENT_SOUNDS = {
+    "correct": ("reward.wav", [(880.0, 0.09), (1174.7, 0.14)]),
+    "calib_reward": ("calib.wav", [(659.3, 0.09), (880.0, 0.14)]),
+    "step_complete": ("step.wav",
+                      [(523.3, 0.09), (659.3, 0.09), (784.0, 0.16)]),
+    "routine_complete": ("fanfare.wav",
+                         [(523.3, 0.12), (659.3, 0.12), (784.0, 0.12),
+                          (1046.5, 0.30)]),
+    "wrong": ("wrong.wav", [(196.0, 0.20)]),
+}
+
+
+def ensure_event_sounds():
+    import wave
+    import struct
+    import math
+    os.makedirs(SOUND_DIR, exist_ok=True)
+    rate = 22050
+    for fname, notes in EVENT_SOUNDS.values():
+        path = os.path.join(SOUND_DIR, fname)
+        if os.path.exists(path):
+            continue
+        frames = []
+        for freq, dur in notes:
+            n = int(rate * dur)
+            for i in range(n):
+                env = (n - i) / n                    # decay
+                if i < 80:
+                    env *= i / 80.0                  # attack, avoids clicks
+                v = 0.45 * env * math.sin(2.0 * math.pi * freq * i / rate)
+                frames.append(struct.pack("<h", int(v * 32767)))
+        with wave.open(path, "w") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            w.writeframes(b"".join(frames))
 
 VIDEO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "instruction_video.mp4")
@@ -413,6 +456,7 @@ class LiveClassifier(threading.Thread):
         self._calib_start = None
         self._classifier = None
         self._last_write = 0.0
+        self._last_step_kind = None
 
     def open(self):
         if serial is None:
@@ -479,6 +523,12 @@ class LiveClassifier(threading.Thread):
                     if event is not None:
                         self.game_event = event
                         self.game_event_ts = time.time()
+                    # entering a routine calibration break: re-zero the
+                    # integrated turn angle so drift can't stack up
+                    kind = self.game.current_kind()
+                    if kind == "calib" and self._last_step_kind != "calib":
+                        self._classifier.mapper.reset_turn()
+                    self._last_step_kind = kind
 
             self._write_state()
 
@@ -554,12 +604,85 @@ def main():
     reader.start()
 
     import pyqtgraph as pg
-    from pyqtgraph.Qt import QtWidgets, QtCore
+    from pyqtgraph.Qt import QtWidgets, QtCore, QtGui
     from PyQt6.QtCore import QUrl
     from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
     from PyQt6.QtMultimediaWidgets import QVideoWidget
 
     app = pg.mkQApp("Live action")
+
+    # achievement sounds (synthesized on first run); disabled on any failure
+    sound_effects = {}
+    try:
+        from PyQt6.QtMultimedia import QSoundEffect
+        ensure_event_sounds()
+        for ev_name, (fname, _notes) in EVENT_SOUNDS.items():
+            eff = QSoundEffect()
+            eff.setSource(QUrl.fromLocalFile(os.path.join(SOUND_DIR, fname)))
+            eff.setVolume(0.6)
+            sound_effects[ev_name] = eff
+    except Exception:
+        sound_effects = {}
+
+    class ThresholdBar(QtWidgets.QProgressBar):
+        # progress bar with a vertical marker at the classifier threshold:
+        # the movement counts once the fill crosses the line
+        def __init__(self, threshold):
+            super().__init__()
+            self._threshold = threshold
+
+        def paintEvent(self, ev):
+            super().paintEvent(ev)
+            p = QtGui.QPainter(self)
+            x = max(1, min(self.width() - 2,
+                           int(self.width() * self._threshold)))
+            pen = QtGui.QPen(QtGui.QColor("#e5e7eb"))
+            pen.setWidth(2)
+            p.setPen(pen)
+            p.drawLine(x, 1, x, self.height() - 2)
+            p.end()
+
+    class RewardFlash(QtWidgets.QLabel):
+        # floating achievement text: pops at the window center, rises, fades
+        def __init__(self, parent):
+            super().__init__(parent)
+            self.setAttribute(
+                QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            self.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            self._fx = QtWidgets.QGraphicsOpacityEffect(self)
+            self.setGraphicsEffect(self._fx)
+            self.hide()
+            self._anim = None
+
+        def pop(self, text, color):
+            if self._anim is not None:
+                self._anim.stop()
+            self.setText(text)
+            self.setStyleSheet("color:%s; font-size:26px; font-weight:800;"
+                               "background:transparent;" % color)
+            self.adjustSize()
+            x = (self.parent().width() - self.width()) // 2
+            y0 = int(self.parent().height() * 0.45)
+            y1 = int(self.parent().height() * 0.18)
+            self._fx.setOpacity(1.0)
+            self.move(x, y0)
+            self.show()
+            self.raise_()
+            grp = QtCore.QParallelAnimationGroup(self)
+            rise = QtCore.QPropertyAnimation(self, b"pos", grp)
+            rise.setStartValue(QtCore.QPoint(x, y0))
+            rise.setEndValue(QtCore.QPoint(x, y1))
+            rise.setDuration(1200)
+            rise.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
+            fade = QtCore.QPropertyAnimation(self._fx, b"opacity", grp)
+            fade.setStartValue(1.0)
+            fade.setEndValue(0.0)
+            fade.setDuration(1200)
+            grp.addAnimation(rise)
+            grp.addAnimation(fade)
+            grp.finished.connect(self.hide)
+            self._anim = grp
+            grp.start()
 
     class InstructionVideoPlayer(QtWidgets.QWidget):
         def __init__(self, video_path, segments):
@@ -712,13 +835,17 @@ def main():
     grid = QtWidgets.QGridLayout()
     grid.setHorizontalSpacing(12)
     grid.setVerticalSpacing(10)
+    BAR_THRESHOLDS = {
+        "lean": TILT_GATE, "lift_L": TILT_GATE, "lift_R": TILT_GATE,
+        "turn_L": TURN_GATE, "turn_R": TURN_GATE,
+    }
     for r, (key, name) in enumerate([
             ("lean", "Lean"), ("lift_L", "Lift L"),
             ("lift_R", "Lift R"), ("turn_L", "Turn L"),
             ("turn_R", "Turn R")]):
         lab = QtWidgets.QLabel(name)
         lab.setStyleSheet("color:#cfd3d8; font-size:13px;") #check
-        bar = QtWidgets.QProgressBar()
+        bar = ThresholdBar(BAR_THRESHOLDS[key])
         bar.setRange(0, 100)
         bar.setTextVisible(False)
         bar.setFixedHeight(14)
@@ -760,6 +887,9 @@ def main():
     btn.clicked.connect(reader.recalibrate)
     left.addWidget(btn)
 
+    reward_flash = RewardFlash(win)
+    handled_event_ts = [0.0]
+
     def update():
         state, progress, label, feats, error = reader.snapshot()
         game, event, event_ts = reader.game_snapshot()
@@ -774,6 +904,14 @@ def main():
         score_label.setText(
             "Score: %d   Rounds: %d" % (game["score"], game["rounds_completed"]))
         seq_label.setText(render_routine_html(game))
+        if event is not None and event_ts > handled_event_ts[0]:
+            # fire achievement sound + floating animation ONCE per event
+            handled_event_ts[0] = event_ts
+            eff = sound_effects.get(event)
+            if eff is not None:
+                eff.play()
+            text, color = EVENT_DISPLAY.get(event, (event, "#cfd3d8"))
+            reward_flash.pop(text, color)
         if event is not None and time.time() - event_ts < EVENT_FLASH_SECONDS:
             text, color = EVENT_DISPLAY.get(event, (event, "#cfd3d8"))
             flash_label.setText(text)

@@ -260,6 +260,11 @@ class MovementMapper:
         self._turnL_active = False
         self._turnR_active = False
 
+    def reset_turn(self):
+        # Re-zero the integrated yaw angle. Called during the routine's
+        # calibration breaks so gyro drift can't accumulate across sections.
+        self._yaw_angle_deg = 0.0
+
     def _ema(self, prev, new):
         a = self.cal.ema_alpha
         return a * new + (1.0 - a) * prev
