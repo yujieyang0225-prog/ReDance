@@ -18,8 +18,7 @@ from classify import (
     ActionClassifier, NEUTRAL, LEAN, LIFT_L, LIFT_R, TURN_LEFT, TURN_RIGHT,
 )
 from game import (
-    RoutineGame, POINTS_PER_REP, POINTS_COMBO, POINTS_STEP_COMPLETE,
-    BONUS_ON_COMPLETE,
+    RoutineGame, POINTS_PER_REP, POINTS_STEP_COMPLETE, BONUS_ON_COMPLETE,
 )
 
 # ---------------------------------------------------------------------------
@@ -60,7 +59,6 @@ DISPLAY = {
 # how each game event is flashed: (text, color)
 EVENT_DISPLAY = {
     "correct": ("+%d" % POINTS_PER_REP, "#27ae60"),
-    "combo": ("Combo!  +%d" % POINTS_COMBO, "#f1c40f"),
     "wrong": ("Wrong move — keep going", "#e74c3c"),
     "step_complete": ("Step complete!  +%d" % POINTS_STEP_COMPLETE, "#27ae60"),
     "routine_complete": ("Routine complete!  +%d bonus" % BONUS_ON_COMPLETE,
