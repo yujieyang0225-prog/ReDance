@@ -50,21 +50,21 @@ TURN_MAX_DEG = 45.0
 
 # how each label is shown: (text, color)
 DISPLAY = {
-    NEUTRAL:    ("\u2014 neutral \u2014", "#8a8f98"),
-    LEAN:       ("Lean forward",      "#e08a2b"),
-    LIFT_L:     ("Lift LEFT thigh",   "#27ae60"),
-    LIFT_R:     ("Lift RIGHT thigh",  "#2980b9"),
-    TURN_LEFT:  ("↺ Turn LEFT",  "#8e44ad"),
-    TURN_RIGHT: ("Turn RIGHT ↻", "#16a085"),
+    NEUTRAL:    ("\u2014 Ruhehaltung \u2014", "#8a8f98"),
+    LEAN:       ("Nach vorne beugen", "#e08a2b"),
+    LIFT_L:     ("Linkes Bein heben", "#27ae60"),
+    LIFT_R:     ("Rechtes Bein heben", "#2980b9"),
+    TURN_LEFT:  ("↺ Nach links drehen", "#8e44ad"),
+    TURN_RIGHT: ("Nach rechts drehen ↻", "#16a085"),
 }
 
 # how each game event is flashed: (text, color)
 EVENT_DISPLAY = {
     "correct": ("+%d" % POINTS_PER_REP, "#27ae60"),
-    "calib_reward": ("Calibrated!  +%d" % POINTS_CALIB, "#3b9ea5"),
-    "step_complete": ("★ Step complete!  +%d ★" % POINTS_STEP_COMPLETE,
+    "calib_reward": ("Kalibriert!  +%d" % POINTS_CALIB, "#3b9ea5"),
+    "step_complete": ("★ Übung geschafft!  +%d ★" % POINTS_STEP_COMPLETE,
                       "#27ae60"),
-    "routine_complete": ("Congratulations — all passed!  +%d bonus"
+    "routine_complete": ("Glückwunsch — alles geschafft!  +%d Bonus"
                          % BONUS_ON_COMPLETE, "#f1c40f"),
 }
 EVENT_FLASH_SECONDS = 1.5
@@ -132,11 +132,11 @@ def render_routine_html(game):
     # This is the window's PROMINENT display, so it gets the large type.
     return (
         '<span style="color:#f1c40f; font-size:16px; font-weight:600;">%s</span>'
-        '<span style="color:#5a5f68; font-size:14px;">  ·  step %d/%d</span>'
+        '<span style="color:#5a5f68; font-size:14px;">  ·  Schritt %d/%d</span>'
         '<br><span style="color:#e5e7eb; font-size:40px; font-weight:800;">'
         '%s</span><br>'
         '<span style="color:#27ae60; font-size:24px; font-weight:700;">%s</span>'
-        '<br><span style="color:#5a5f68; font-size:14px;">next: %s</span>'
+        '<br><span style="color:#5a5f68; font-size:14px;">danach: %s</span>'
         % (game["phase"], game["step_index"], game["step_total"],
            game["step_name"], game["step_detail"], game["next_name"]))
 
@@ -751,7 +751,7 @@ def main():
             layout.setContentsMargins(0, 0, 0, 0)
             layout.setSpacing(8)
 
-            title = QtWidgets.QLabel("Instruction video")
+            title = QtWidgets.QLabel("Übungsvideo")
             title.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             title.setStyleSheet("color:#e5e7eb; font-size:16px; font-weight:700;")
             layout.addWidget(title)
@@ -778,9 +778,9 @@ def main():
 
             if os.path.exists(self._video_path):
                 self._player.setSource(QUrl.fromLocalFile(self._video_path))
-                self._status.setText("Looping will follow the routine step.")
+                self._status.setText("Das Video folgt der aktuellen Übung.")
             else:
-                self._status.setText("Video file not found: " + self._video_path)
+                self._status.setText("Videodatei nicht gefunden: " + self._video_path)
 
         def set_segment(self, name, segment):
             # segment: (start_s, stop_s) from the routine step, or None to
@@ -793,15 +793,15 @@ def main():
                 self._segment_start_ms = 0
                 self._segment_end_ms = 0
                 self._player.pause()
-                self._status.setText("Video paused: " + name)
+                self._status.setText("Video pausiert: " + name)
                 return
             start_s, end_s = segment
             self._segment_start_ms = int(start_s * 1000)
             self._segment_end_ms = int(end_s * 1000)
             if self._player.source().isEmpty():
-                self._status.setText("Video source unavailable")
+                self._status.setText("Video nicht verfügbar")
                 return
-            self._status.setText("Looping: " + name)
+            self._status.setText("Video läuft: " + name)
             self._player.setPosition(self._segment_start_ms)
             self._player.play()
 
@@ -835,11 +835,11 @@ def main():
 
     win = ControlWindow(reader, args.mode == "simulate")
     if args.mode == "simulate":
-        win.setWindowTitle("Movement recognition - simulation")
+        win.setWindowTitle("Bewegungserkennung – Simulation")
     elif args.mode == "mujoco":
-        win.setWindowTitle("Movement recognition - MuJoCo motion")
+        win.setWindowTitle("Bewegungserkennung – MuJoCo")
     else:
-        win.setWindowTitle("Movement recognition")
+        win.setWindowTitle("Bewegungserkennung")
     win.resize(1120, 560)
     win.setStyleSheet("background:#101216;")
     root = QtWidgets.QHBoxLayout(win)
@@ -858,27 +858,27 @@ def main():
     right.addWidget(video_panel, stretch=1)
 
     if args.mode == "simulate":
-        _status0 = "Simulation mode: hold still \u2014 readying\u2026"
+        _status0 = "Simulation: bitte warten\u2026"
     elif args.mode == "mujoco":
-        _status0 = "Waiting for MuJoCo motion\u2026"
+        _status0 = "Warte auf den MuJoCo-Avatar\u2026"
     else:
-        _status0 = "Hold still \u2014 calibrating\u2026"
+        _status0 = "Bitte still halten \u2014 Kalibrierung\u2026"
     status = QtWidgets.QLabel(_status0)
     status.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
     status.setStyleSheet("color:#9aa0a8; font-size:15px;")
     left.addWidget(status)
 
     if args.mode == "simulate":
-        hint = QtWidgets.QLabel("Keys: Q=neutral, W=lean, E=left lift, R=right lift, T=turn left, Y=turn right")
+        hint = QtWidgets.QLabel("Tasten: Q=Ruhe, W=Beugen, E=Bein links, R=Bein rechts, T=Drehen links, Y=Drehen rechts")
         hint.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         hint.setStyleSheet("color:#7f8791; font-size:12px;")
         hint.setWordWrap(True)
         left.addWidget(hint)
     elif args.mode == "mujoco":
         hint = QtWidgets.QLabel(
-            "Drive the avatar in run_professional_rehab.py (keys 1-5, one "
-            "rep each) — its motion is recognized here in real time. "
-            "Labels are the avatar's OWN left/right (screen shows a mirror).")
+            "Avatar mit den Tasten 1-5 steuern (je eine Wiederholung) — "
+            "seine Bewegung wird hier live erkannt. Links/rechts ist aus "
+            "Sicht des Avatars (der Bildschirm zeigt ein Spiegelbild).")
         hint.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         hint.setStyleSheet("color:#7f8791; font-size:12px;")
         hint.setWordWrap(True)
@@ -893,7 +893,7 @@ def main():
     seq_label.setWordWrap(True)
     left.addWidget(seq_label, stretch=1)
 
-    score_label = QtWidgets.QLabel("Score: 0   Rounds: 0")
+    score_label = QtWidgets.QLabel("Punkte: 0   Runden: 0")
     score_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
     score_label.setStyleSheet(
         "color:#e5e7eb; font-size:28px; font-weight:800;")
@@ -908,9 +908,9 @@ def main():
         "turn_L": TURN_GATE, "turn_R": TURN_GATE,
     }
     for r, (key, name) in enumerate([
-            ("lean", "Lean"), ("lift_L", "Lift L"),
-            ("lift_R", "Lift R"), ("turn_L", "Turn L"),
-            ("turn_R", "Turn R")]):
+            ("lean", "Beugen"), ("lift_L", "Bein links"),
+            ("lift_R", "Bein rechts"), ("turn_L", "Drehen links"),
+            ("turn_R", "Drehen rechts")]):
         lab = QtWidgets.QLabel(name)
         lab.setStyleSheet("color:#cfd3d8; font-size:13px;") #check
         bar = ThresholdBar(BAR_THRESHOLDS[key])
@@ -937,11 +937,11 @@ def main():
     left.addWidget(flash_label)
 
     if args.mode == "simulate":
-        _btn_text = "Recalibrate (restart simulation)"
+        _btn_text = "Neu kalibrieren (Simulation neu starten)"
     elif args.mode == "mujoco":
-        _btn_text = "Recalibrate (avatar at neutral)"
+        _btn_text = "Neu kalibrieren (Avatar in Ruhelage)"
     else:
-        _btn_text = "Recalibrate (hold still)"
+        _btn_text = "Neu kalibrieren (bitte still sitzen)"
     btn = QtWidgets.QPushButton(_btn_text)
     btn.setStyleSheet(
         "QPushButton{color:#cfd3d8; background:#1c1f26; border:none;"
@@ -957,15 +957,15 @@ def main():
         state, progress, label, feats, error = reader.snapshot()
         game, event, event_ts = reader.game_snapshot()
         if error is not None:
-            status.setText("Serial error: " + error)
+            status.setText("Sensor-Fehler: " + error)
             return
         if args.mode == "mujoco" and getattr(reader, "waiting", False):
             status.setText(
-                "Waiting for MuJoCo motion — start run_professional_rehab.py")
+                "Warte auf den Avatar — bitte run_professional_rehab.py starten")
             return
         video_panel.set_segment(game["step_name"], game.get("video_segment"))
         score_label.setText(
-            "Score: %d   Rounds: %d" % (game["score"], game["rounds_completed"]))
+            "Punkte: %d   Runden: %d" % (game["score"], game["rounds_completed"]))
         seq_label.setText(render_routine_html(game))
         # green threshold line on the bar of the currently expected movement
         expected_bar = {
@@ -995,13 +995,13 @@ def main():
         if state == "calibrating":
             remaining = max(0.0, CALIB_SECONDS * (1.0 - progress))
             if args.mode == "simulate":
-                status.setText("Simulation mode: readying\u2026  %.1fs" % remaining)
+                status.setText("Simulation: bitte warten\u2026  %.1f s" % remaining)
             elif args.mode == "mujoco":
                 status.setText(
-                    "Keep the avatar neutral \u2014 calibrating\u2026  %.1fs" % remaining)
+                    "Avatar ruhig lassen \u2014 Kalibrierung\u2026  %.1f s" % remaining)
             else:
                 status.setText(
-                    "Hold still \u2014 calibrating\u2026  %.1fs" % remaining)
+                    "Bitte ruhig sitzen \u2014 Kalibrierung l\u00e4uft\u2026  %.1f s" % remaining)
             big.setText("\u2014")
             big.setStyleSheet(
                 "color:#8a8f98; font-size:18px; font-weight:600;")
@@ -1009,11 +1009,11 @@ def main():
                 b.setValue(0)
             return
         if args.mode == "simulate":
-            status.setText("Simulation mode: recognized movement")
+            status.setText("Simulation: Bewegung erkannt")
         elif args.mode == "mujoco":
-            status.setText("Recognizing MuJoCo avatar motion")
+            status.setText("Avatar-Bewegung wird erkannt")
         else:
-            status.setText("Recognizing movement")
+            status.setText("Ihre Bewegung wird erkannt")
         text, color = DISPLAY.get(label, (label, "#cfd3d8"))
         big.setText(text)
         big.setStyleSheet("color:%s; font-size:18px; font-weight:600;" % color)

@@ -54,46 +54,56 @@ def _calib():
     # same as the Recalibrate button; see the classifier threads in
     # live_action.py). Completing the break awards POINTS_CALIB as a reward.
     # No video: the instruction video pauses while the player sits still.
-    return {"kind": "calib", "name": "Calibration - sit still",
+    return {"kind": "calib", "name": "Kalibrierung – bitte still sitzen",
             "seconds": CALIB_STEP_SECONDS, "video": None}
 
 
 TIPTOES = (LIFT_L, LIFT_R, LIFT_L, LIFT_R, LIFT_L, LIFT_R)
+
+# simple German names for the movements, shown to the patient
+LABEL_TEXT_DE = {
+    NEUTRAL: "Ruhehaltung",
+    LEAN: "nach vorne beugen",
+    LIFT_L: "linkes Bein heben",
+    LIFT_R: "rechtes Bein heben",
+    TURN_LEFT: "nach links drehen",
+    TURN_RIGHT: "nach rechts drehen",
+}
 
 # Each step carries its own instruction-video segment (start_s, stop_s), so
 # repeated step names (Tip Toes, Trunk Flex, ...) loop their OWN part of the
 # video. Timestamps from the choreography video cut list.
 ROUTINE = [
     # ----- Warmup -----
-    ("Warmup", _hold("Baseline", NEUTRAL, 10.0, video=(0.0, 2.0))),
-    ("Warmup", _timed("Foot Rotate", 20.0, video=(2.0, 17.0))),
-    ("Warmup", _timed("Reach-Over", 20.0, video=(17.0, 27.0))),
+    ("Aufwärmen", _hold("Ruhig sitzen", NEUTRAL, 10.0, video=(0.0, 2.0))),
+    ("Aufwärmen", _timed("Füße kreisen", 20.0, video=(2.0, 17.0))),
+    ("Aufwärmen", _timed("Zur Seite greifen", 20.0, video=(17.0, 27.0))),
     # ----- Dance (3 s calibration reward between sections) -----
-    ("Dance", _seq("Tip Toes", TIPTOES, video=(27.0, 37.0))),
-    ("Dance", _calib()),
-    ("Dance", _seq("Lift off R", (LIFT_R,) * 3, video=(28.0, 29.0))),
-    ("Dance", _calib()),
-    ("Dance", _seq("Lift off L", (LIFT_L,) * 3, video=(29.0, 30.0))),
-    ("Dance", _calib()),
-    ("Dance", _seq("Babysteps", (LIFT_L,) * 3, video=(37.0, 40.0))),
-    ("Dance", _calib()),
-    ("Dance", _seq("Trunk Flex", (LEAN, LEAN), video=(40.0, 47.0))),
-    ("Dance", _calib()),
-    ("Dance", _seq("Trunk Flex", (LEAN, LEAN), video=(47.0, 53.0))),
-    ("Dance", _calib()),
-    ("Dance", _seq("Trunk Rotate", (TURN_LEFT, TURN_RIGHT),
+    ("Tanz", _seq("Zehenspitzen", TIPTOES, video=(27.0, 37.0))),
+    ("Tanz", _calib()),
+    ("Tanz", _seq("Rechtes Bein heben", (LIFT_R,) * 3, video=(28.0, 29.0))),
+    ("Tanz", _calib()),
+    ("Tanz", _seq("Linkes Bein heben", (LIFT_L,) * 3, video=(29.0, 30.0))),
+    ("Tanz", _calib()),
+    ("Tanz", _seq("Kleine Schritte", (LIFT_L,) * 3, video=(37.0, 40.0))),
+    ("Tanz", _calib()),
+    ("Tanz", _seq("Nach vorne beugen", (LEAN, LEAN), video=(40.0, 47.0))),
+    ("Tanz", _calib()),
+    ("Tanz", _seq("Nach vorne beugen", (LEAN, LEAN), video=(47.0, 53.0))),
+    ("Tanz", _calib()),
+    ("Tanz", _seq("Oberkörper drehen", (TURN_LEFT, TURN_RIGHT),
                    video=(53.0, 59.0))),
-    ("Dance", _calib()),
-    ("Dance", _seq("Tip Toes", TIPTOES, video=(59.0, 67.0))),
-    ("Dance", _calib()),
-    ("Dance", _seq("Trunk Flex", (LEAN, LEAN), video=(67.0, 74.0))),
-    ("Dance", _calib()),
-    ("Dance", _seq("Trunk Flex", (LEAN, LEAN), video=(74.0, 80.0))),
-    ("Dance", _calib()),
-    ("Dance", _seq("Trunk Rotate", (TURN_LEFT, TURN_RIGHT),
+    ("Tanz", _calib()),
+    ("Tanz", _seq("Zehenspitzen", TIPTOES, video=(59.0, 67.0))),
+    ("Tanz", _calib()),
+    ("Tanz", _seq("Nach vorne beugen", (LEAN, LEAN), video=(67.0, 74.0))),
+    ("Tanz", _calib()),
+    ("Tanz", _seq("Nach vorne beugen", (LEAN, LEAN), video=(74.0, 80.0))),
+    ("Tanz", _calib()),
+    ("Tanz", _seq("Oberkörper drehen", (TURN_LEFT, TURN_RIGHT),
                    video=(80.0, 87.0))),
-    ("Dance", _calib()),
-    ("Dance", _seq("Babysteps", (LIFT_R,) * 3, video=(93.0, 100.0))),
+    ("Tanz", _calib()),
+    ("Tanz", _seq("Kleine Schritte", (LIFT_R,) * 3, video=(93.0, 100.0))),
 ]
 
 
@@ -208,22 +218,23 @@ class RoutineGame:
         now = time.time()
         if kind == "hold":
             elapsed = 0.0 if self._hold_start is None else now - self._hold_start
-            detail = "hold  %.0f / %.0f s" % (min(elapsed, step["seconds"]),
-                                              step["seconds"])
+            detail = "halten:  %.0f / %.0f s" % (min(elapsed, step["seconds"]),
+                                                 step["seconds"])
             progress = min(1.0, elapsed / step["seconds"])
         elif kind in ("timed", "calib"):
             elapsed = 0.0 if self._timed_start is None else now - self._timed_start
-            detail = "%.0f s left" % max(0.0, step["seconds"] - elapsed)
+            detail = "noch %.0f s" % max(0.0, step["seconds"] - elapsed)
             progress = min(1.0, elapsed / step["seconds"])
         else:
             total = len(step["labels"])
             nxt = step["labels"][self._count] if self._count < total else ""
-            detail = "%d / %d  ·  now: %s" % (self._count, total, nxt)
+            detail = "%d / %d  ·  jetzt: %s" % (
+                self._count, total, LABEL_TEXT_DE.get(nxt, nxt))
             progress = self._count / float(total)
         if self._i + 1 < len(self.routine):
             next_name = self.routine[self._i + 1][1]["name"]
         else:
-            next_name = "finish!"
+            next_name = "geschafft!"
         if kind == "seq" and self._count < len(step["labels"]):
             expected_label = step["labels"][self._count]
         elif kind == "hold":
