@@ -129,12 +129,14 @@ SIM_KEY_TO_LABEL = {
 
 def render_routine_html(game):
     # Current phase + step with live progress, and a peek at the next step.
+    # This is the window's PROMINENT display, so it gets the large type.
     return (
-        '<span style="color:#f1c40f;">%s</span>'
-        '<span style="color:#5a5f68;">  ·  step %d/%d</span><br>'
-        '<span style="color:#e5e7eb; font-size:16px; font-weight:600;">%s</span>'
-        '  <span style="color:#27ae60;">%s</span><br>'
-        '<span style="color:#5a5f68;">next: %s</span>'
+        '<span style="color:#f1c40f; font-size:16px; font-weight:600;">%s</span>'
+        '<span style="color:#5a5f68; font-size:14px;">  ·  step %d/%d</span>'
+        '<br><span style="color:#e5e7eb; font-size:40px; font-weight:800;">'
+        '%s</span><br>'
+        '<span style="color:#27ae60; font-size:24px; font-weight:700;">%s</span>'
+        '<br><span style="color:#5a5f68; font-size:14px;">next: %s</span>'
         % (game["phase"], game["step_index"], game["step_total"],
            game["step_name"], game["step_detail"], game["next_name"]))
 
@@ -882,11 +884,20 @@ def main():
         hint.setWordWrap(True)
         left.addWidget(hint)
 
-    big = QtWidgets.QLabel("\u2014")
-    big.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-    big.setStyleSheet("color:#8a8f98; font-size:46px; font-weight:700;")
-    big.setWordWrap(True)
-    left.addWidget(big, stretch=1)
+    # The routine (expected sequence) and score are the PROMINENT display;
+    # the currently recognized movement is the small readout below the bars.
+    seq_label = QtWidgets.QLabel()
+    seq_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+    seq_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
+    seq_label.setStyleSheet("font-size:15px;")
+    seq_label.setWordWrap(True)
+    left.addWidget(seq_label, stretch=1)
+
+    score_label = QtWidgets.QLabel("Score: 0   Rounds: 0")
+    score_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+    score_label.setStyleSheet(
+        "color:#e5e7eb; font-size:28px; font-weight:800;")
+    left.addWidget(score_label)
 
     bars = {}
     grid = QtWidgets.QGridLayout()
@@ -914,16 +925,11 @@ def main():
         bars[key] = bar
     left.addLayout(grid)
 
-    score_label = QtWidgets.QLabel("Score: 0   Rounds: 0")
-    score_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-    score_label.setStyleSheet("color:#e5e7eb; font-size:18px; font-weight:700;")
-    left.addWidget(score_label)
-
-    seq_label = QtWidgets.QLabel()
-    seq_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-    seq_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
-    seq_label.setStyleSheet("font-size:14px;")
-    left.addWidget(seq_label)
+    big = QtWidgets.QLabel("—")   # currently recognized movement (small)
+    big.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+    big.setStyleSheet("color:#8a8f98; font-size:18px; font-weight:600;")
+    big.setWordWrap(True)
+    left.addWidget(big)
 
     flash_label = QtWidgets.QLabel("")
     flash_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
@@ -998,7 +1004,7 @@ def main():
                     "Hold still \u2014 calibrating\u2026  %.1fs" % remaining)
             big.setText("\u2014")
             big.setStyleSheet(
-                "color:#8a8f98; font-size:46px; font-weight:700;")
+                "color:#8a8f98; font-size:18px; font-weight:600;")
             for b in bars.values():
                 b.setValue(0)
             return
@@ -1010,7 +1016,7 @@ def main():
             status.setText("Recognizing movement")
         text, color = DISPLAY.get(label, (label, "#cfd3d8"))
         big.setText(text)
-        big.setStyleSheet("color:%s; font-size:46px; font-weight:700;" % color)
+        big.setStyleSheet("color:%s; font-size:18px; font-weight:600;" % color)
         bars["lean"].setValue(int(100 * feats["lean"]))
         bars["lift_L"].setValue(int(100 * feats["lift_L"]))
         bars["lift_R"].setValue(int(100 * feats["lift_R"]))
