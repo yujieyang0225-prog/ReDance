@@ -706,7 +706,8 @@ def main():
     grid.setVerticalSpacing(10)
     for r, (key, name) in enumerate([
             ("lean", "Lean"), ("lift_L", "Lift L"),
-            ("lift_R", "Lift R"), ("turn", "Turn")]):
+            ("lift_R", "Lift R"), ("turn_L", "Turn L"),
+            ("turn_R", "Turn R")]):
         lab = QtWidgets.QLabel(name)
         lab.setStyleSheet("color:#cfd3d8; font-size:13px;") #check
         bar = QtWidgets.QProgressBar()
@@ -800,7 +801,9 @@ def main():
         bars["lean"].setValue(int(100 * feats["lean"]))
         bars["lift_L"].setValue(int(100 * feats["lift_L"]))
         bars["lift_R"].setValue(int(100 * feats["lift_R"]))
-        bars["turn"].setValue(int(100 * abs(feats["turn"])))
+        # turn is signed (negative = left); show each direction on its own bar
+        bars["turn_L"].setValue(int(100 * max(0.0, -feats["turn"])))
+        bars["turn_R"].setValue(int(100 * max(0.0, feats["turn"])))
 
     timer = QtCore.QTimer()
     timer.timeout.connect(update)
