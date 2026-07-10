@@ -110,6 +110,10 @@ def tilt_angle_deg(acc, base_unit):
     # Mounting-agnostic: no per-axis bookkeeping, drift-free.
     au = _unit(acc)
     d = au[0] * base_unit[0] + au[1] * base_unit[1] + au[2] * base_unit[2]
+    if d != d:
+        # NaN: the sensor is not delivering data (e.g. failed init, loose
+        # cable). Report no tilt instead of poisoning the whole pipeline.
+        return 0.0
     return math.degrees(math.acos(_clamp(d, -1.0, 1.0)))
 
 
@@ -263,6 +267,8 @@ class MovementMapper:
         self._ema_liftR = self._ema(self._ema_liftR, tilt_thighR)
 
         yaw_raw = gyro_vector(sample, LUMBAR)[c.yaw_axis] * c.yaw_sign
+        if yaw_raw != yaw_raw:           # NaN: sensor not delivering data
+            yaw_raw = 0.0
         yaw_eff = 0.0 if abs(yaw_raw) < c.deadband_dps else yaw_raw
 
         lean = _clamp(self._ema_lean / c.lean_deg, 0.0, 1.0)
