@@ -15,7 +15,7 @@
     <material name="chair" rgba="0.18 0.20 0.23 1"/>
     <material name="chair_pad" rgba="0.08 0.14 0.20 1"/>
     <material name="imu_blue" rgba="0.00 0.65 1.00 1"/>
-    <material name="target_green" rgba="0.10 0.65 0.35 1"/>
+    
     
   </asset>
 
@@ -118,8 +118,6 @@
       </body>
     </body>
 
-    <body name="foot_target" pos="0 -0.95 0.08">
-      <geom type="box" size="0.32 0.15 0.08" material="target_green"/>
-    </body>
+    
   </worldbody>
 </mujoco>
