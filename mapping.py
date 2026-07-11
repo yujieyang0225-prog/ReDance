@@ -4,9 +4,10 @@
 # live stream or a replayed log/CSV.
 #
 # Sensor roles (validated against the labeled movement logs):
-#   IMU0 lumbar -> lean (accel tilt) + turn (yaw gyro)
-#   IMU3 thighL -> lift_L (accel tilt)
-#   IMU4 thighR -> lift_R (accel tilt)
+#   IMU0 lumbar   -> lean (accel tilt)
+#   IMU1 cervical -> turn (yaw gyro)
+#   IMU3 thighL   -> lift_L (accel tilt)
+#   IMU4 thighR   -> lift_R (accel tilt)
 #
 # Key principle proven by the data: the resting gravity axis is NOT fixed
 # (it sat on Y in one session, X in another). So the yaw gyro axis is
@@ -21,12 +22,14 @@
 
 import json
 import math
+import time
 from dataclasses import dataclass, field, asdict
 
 # ---------------------------------------------------------------------------
 # Shared parse contract (identical to the acquisition side)
 # ---------------------------------------------------------------------------
 LUMBAR = 0
+CERVICAL = 1
 THIGH_L = 3
 THIGH_R = 4
 
@@ -35,6 +38,17 @@ for _i in range(5):
     _s = str(_i)
     CHANNELS += ["ax" + _s, "ay" + _s, "az" +
                  _s, "gx" + _s, "gy" + _s, "gz" + _s]
+
+# The recognition pipeline uses the lumbar, cervical and thigh IMUs. The
+# current hardware (IMU_getAccGyr_twoAddr_oneMult_fourIMU.ino) streams these
+# 4 IMUs and no longer sends IMU2, so completeness checks must gate on these
+# channels only. Old 5-IMU logs are a superset and still pass.
+REQUIRED_IMUS = (LUMBAR, CERVICAL, THIGH_L, THIGH_R)
+REQUIRED_CHANNELS = []
+for _i in REQUIRED_IMUS:
+    _s = str(_i)
+    REQUIRED_CHANNELS += ["ax" + _s, "ay" + _s, "az" +
+                          _s, "gx" + _s, "gy" + _s, "gz" + _s]
 
 
 def parse_line(line):
@@ -94,11 +108,23 @@ def _clamp(x, lo, hi):
     return x
 
 
+def _dot(a, b):
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
 def tilt_angle_deg(acc, base_unit):
     # Angle between the current gravity direction and the neutral one.
     # Mounting-agnostic: no per-axis bookkeeping, drift-free.
+    if _norm(acc) < 0.05 or _norm(base_unit) < 0.5:
+        # All-zero (mux/cable outage) or zero baseline: the sensor is not
+        # delivering data. Report no tilt instead of a bogus 90 degrees
+        # that pegs the lift at full scale.
+        return 0.0
     au = _unit(acc)
     d = au[0] * base_unit[0] + au[1] * base_unit[1] + au[2] * base_unit[2]
+    if d != d:
+        # NaN: same story (e.g. failed init mid-stream).
+        return 0.0
     return math.degrees(math.acos(_clamp(d, -1.0, 1.0)))
 
 
@@ -127,17 +153,27 @@ def _median_vector(samples, imu):
 class Calibration:
     # neutral gravity directions (unit vectors)
     base_lumbar: tuple = (1.0, 0.0, 0.0)
+    base_cervical: tuple = (1.0, 0.0, 0.0)
     base_thighL: tuple = (0.0, 0.0, 1.0)
     base_thighR: tuple = (0.0, 0.0, 1.0)
 
-    # yaw gyro axis on the lumbar sensor: 0=gx, 1=gy, 2=gz (DETECTED)
+    # Reference "correct direction" delta vectors, detected during
+    # calibration from short guided samples (see calibrate_forward() /
+    # calibrate_lift()). Zero vector = not calibrated -> that movement
+    # falls back to old unsigned (magnitude-only) behavior.
+    fwd_lumbar: tuple = (0.0, 0.0, 0.0)
+    fwd_thighL: tuple = (0.0, 0.0, 0.0)
+    fwd_thighR: tuple = (0.0, 0.0, 0.0)
+
+    # yaw gyro axis on the CERVICAL sensor: 0=gx, 1=gy, 2=gz (DETECTED)
     yaw_axis: int = 0
     yaw_sign: float = 1.0
 
     # full-scale (defaults from log analysis; refine with fit_full_scale)
     lean_deg: float = 50.0
     lift_deg: float = 38.0
-    turn_dps: float = 25.0
+    turn_dps: float = 25.0          # legacy rate scale (kept for old configs)
+    turn_deg: float = 45.0          # full-scale INTEGRATED yaw angle
 
     # conditioning
     deadband_dps: float = 3.5
@@ -148,19 +184,21 @@ class Calibration:
     lean_off_deg: float = 15.0
     lift_on_deg: float = 12.0
     lift_off_deg: float = 8.0
-    turn_on_dps: float = 8.0
-    turn_off_dps: float = 4.0
+    turn_on_deg: float = 20.0       # on integrated yaw angle, like lean
+    turn_off_deg: float = 12.0
 
     def to_dict(self):
         d = asdict(self)
-        for k in ("base_lumbar", "base_thighL", "base_thighR"):
+        for k in ("base_lumbar", "base_cervical", "base_thighL",
+                  "base_thighR", "fwd_lumbar", "fwd_thighL", "fwd_thighR"):
             d[k] = list(d[k])
         return d
 
     @classmethod
     def from_dict(cls, d):
         d = dict(d)
-        for k in ("base_lumbar", "base_thighL", "base_thighR"):
+        for k in ("base_lumbar", "base_cervical", "base_thighL",
+                  "base_thighR", "fwd_lumbar", "fwd_thighL", "fwd_thighR"):
             if k in d:
                 d[k] = tuple(d[k])
         return cls(**d)
@@ -179,7 +217,7 @@ class Calibration:
         # output is patient-specific. movement in:
         #   "lean", "lift_L", "lift_R", "turn"
         if movement == "turn":
-            vals = sorted(abs(gyro_vector(v, LUMBAR)[
+            vals = sorted(abs(gyro_vector(v, CERVICAL)[
                           self.yaw_axis]) for v in samples)
             if vals:
                 self.turn_dps = max(
@@ -202,15 +240,62 @@ def calibrate_neutral(samples):
     # Builds baselines and auto-detects the yaw axis from the gravity vector.
     cal = Calibration()
     g_lumbar = _median_vector(samples, LUMBAR)
+    g_cervical = _median_vector(samples, CERVICAL)
     cal.base_lumbar = _unit(g_lumbar)
+    cal.base_cervical = _unit(g_cervical)
     cal.base_thighL = _unit(_median_vector(samples, THIGH_L))
     cal.base_thighR = _unit(_median_vector(samples, THIGH_R))
 
-    # yaw = rotation about gravity -> the gyro axis aligned with gravity
-    comps = [abs(g_lumbar[0]), abs(g_lumbar[1]), abs(g_lumbar[2])]
+    # yaw = rotation about gravity -> the CERVICAL gyro axis aligned with
+    # gravity (turn is measured at the neck)
+    comps = [abs(g_cervical[0]), abs(g_cervical[1]), abs(g_cervical[2])]
     cal.yaw_axis = comps.index(max(comps))
-    # sign so that gravity component is positive keeps a consistent convention
-    cal.yaw_sign = 1.0 if g_lumbar[cal.yaw_axis] >= 0 else -1.0
+    # Accel reads +1g on the axis pointing UP; turning RIGHT is clockwise
+    # seen from above = a NEGATIVE rate about that up axis (right-hand
+    # rule). Flip the sign so positive turn = RIGHT (classify convention).
+    cal.yaw_sign = -1.0 if g_cervical[cal.yaw_axis] >= 0 else 1.0
+    return cal
+
+
+def _reference_direction(base, samples, imu):
+    # Shared helper: derive a unit "correct movement direction" vector from
+    # a short guided recording (patient performing the movement once right
+    # after neutral), relative to that sensor's calibrated neutral baseline.
+    # Mounting-agnostic -- same principle as calibrate_neutral's yaw
+    # detection, just applied per-movement instead of hardcoding an axis.
+    if not samples:
+        return (0.0, 0.0, 0.0)
+    g_ref = _unit(_median_vector(samples, imu))
+    delta = (g_ref[0] - base[0], g_ref[1] - base[1], g_ref[2] - base[2])
+    return _unit(delta)
+
+
+def calibrate_forward(cal, forward_samples):
+    # Call AFTER calibrate_neutral(). forward_samples: a short recording
+    # of the patient leaning forward once. Detects which physical direction
+    # "forward" is for THIS patient/session's lumbar sensor mounting, so
+    # lean can be signed (forward positive, backward clamped to 0).
+    fwd = _reference_direction(cal.base_lumbar, forward_samples, LUMBAR)
+    if _norm(fwd) > 0.0:
+        cal.fwd_lumbar = fwd
+    return cal
+
+
+def calibrate_lift_left(cal, lift_samples):
+    # Call AFTER calibrate_neutral(). lift_samples: a short recording of
+    # the patient lifting the LEFT leg once. Same idea as calibrate_forward,
+    # applied to the left thigh sensor.
+    fwd = _reference_direction(cal.base_thighL, lift_samples, THIGH_L)
+    if _norm(fwd) > 0.0:
+        cal.fwd_thighL = fwd
+    return cal
+
+
+def calibrate_lift_right(cal, lift_samples):
+    # Same as calibrate_lift_left, for the RIGHT thigh sensor.
+    fwd = _reference_direction(cal.base_thighR, lift_samples, THIGH_R)
+    if _norm(fwd) > 0.0:
+        cal.fwd_thighR = fwd
     return cal
 
 
@@ -223,10 +308,18 @@ class MovementMapper:
         self._ema_lean = 0.0
         self._ema_liftL = 0.0
         self._ema_liftR = 0.0
+        self._yaw_angle_deg = 0.0    # integrated yaw ANGLE (holds a pose)
+        self._last_t = None
         self._lean_active = False
         self._liftL_active = False
         self._liftR_active = False
-        self._turn_active = False
+        self._turnL_active = False
+        self._turnR_active = False
+
+    def reset_turn(self):
+        # Re-zero the integrated yaw angle. Called during the routine's
+        # calibration breaks so gyro drift can't accumulate across sections.
+        self._yaw_angle_deg = 0.0
 
     def _ema(self, prev, new):
         a = self.cal.ema_alpha
@@ -237,27 +330,65 @@ class MovementMapper:
             return value > off
         return value > on
 
-    def update(self, sample):
+    def _signed_tilt(self, sample, imu, base, fwd_ref):
+        # Shared signing logic for lean / lift_L / lift_R: measures the
+        # unsigned tilt angle, then -- if a reference "correct direction"
+        # was calibrated -- flips it negative when the movement went the
+        # WRONG way (e.g. leaning back instead of forward, leg going down
+        # instead of up). No calibrated reference -> unchanged old
+        # unsigned (magnitude-only) behavior.
+        tilt = tilt_angle_deg(accel_vector(sample, imu), base)
+        if _norm(fwd_ref) > 0.0:
+            au = _unit(accel_vector(sample, imu))
+            delta = (au[0] - base[0], au[1] - base[1], au[2] - base[2])
+            if _dot(delta, fwd_ref) < 0.0:
+                tilt = -tilt
+        return tilt
+
+    def update(self, sample, dt=None):
         c = self.cal
 
-        tilt_lumbar = tilt_angle_deg(
-            accel_vector(sample, LUMBAR), c.base_lumbar)
-        tilt_thighL = tilt_angle_deg(
-            accel_vector(sample, THIGH_L), c.base_thighL)
-        tilt_thighR = tilt_angle_deg(
-            accel_vector(sample, THIGH_R), c.base_thighR)
+        # dt: seconds since the previous sample, for yaw integration. Live
+        # streams leave it None (wall clock); offline replay passes the log's
+        # nominal sample interval so integration doesn't collapse to zero.
+        if dt is None:
+            now = time.monotonic()
+            dt = 0.0 if self._last_t is None else min(0.25, now - self._last_t)
+            self._last_t = now
+
+        # Direction-aware lean/lift: if a reference direction was
+        # calibrated (calibrate_forward / calibrate_lift_left/right), the
+        # tilt is signed so the WRONG-direction movement goes negative --
+        # the existing clamp(0,1) below then floors it at 0 instead of
+        # misreading it as progress. Falls back to old unsigned magnitude
+        # if no reference was calibrated for that sensor.
+        tilt_lumbar = self._signed_tilt(
+            sample, LUMBAR, c.base_lumbar, c.fwd_lumbar)
+        tilt_thighL = self._signed_tilt(
+            sample, THIGH_L, c.base_thighL, c.fwd_thighL)
+        tilt_thighR = self._signed_tilt(
+            sample, THIGH_R, c.base_thighR, c.fwd_thighR)
 
         self._ema_lean = self._ema(self._ema_lean, tilt_lumbar)
         self._ema_liftL = self._ema(self._ema_liftL, tilt_thighL)
         self._ema_liftR = self._ema(self._ema_liftR, tilt_thighR)
 
-        yaw_raw = gyro_vector(sample, LUMBAR)[c.yaw_axis] * c.yaw_sign
+        yaw_raw = gyro_vector(sample, CERVICAL)[c.yaw_axis] * c.yaw_sign
+        if yaw_raw != yaw_raw:           # NaN: sensor not delivering data
+            yaw_raw = 0.0
         yaw_eff = 0.0 if abs(yaw_raw) < c.deadband_dps else yaw_raw
+
+        # Integrate rate -> angle so turn TRACKS THE POSE: turning left and
+        # holding keeps turn at its value (like lean holds its tilt). The
+        # deadband stops idle gyro drift from accumulating; clamping at
+        # full-scale keeps the unwind responsive when the patient turns back.
+        self._yaw_angle_deg = _clamp(
+            self._yaw_angle_deg + yaw_eff * dt, -c.turn_deg, c.turn_deg)
 
         lean = _clamp(self._ema_lean / c.lean_deg, 0.0, 1.0)
         lift_L = _clamp(self._ema_liftL / c.lift_deg, 0.0, 1.0)
         lift_R = _clamp(self._ema_liftR / c.lift_deg, 0.0, 1.0)
-        turn = _clamp(yaw_eff / c.turn_dps, -1.0, 1.0)
+        turn = _clamp(self._yaw_angle_deg / c.turn_deg, -1.0, 1.0)
 
         self._lean_active = self._hyst(self._lean_active, self._ema_lean,
                                        c.lean_on_deg, c.lean_off_deg)
@@ -265,8 +396,14 @@ class MovementMapper:
                                         c.lift_on_deg, c.lift_off_deg)
         self._liftR_active = self._hyst(self._liftR_active, self._ema_liftR,
                                         c.lift_on_deg, c.lift_off_deg)
-        self._turn_active = self._hyst(self._turn_active, abs(yaw_raw),
-                                       c.turn_on_dps, c.turn_off_dps)
+        # Split turn flags, hysteresis on the held angle exactly like lean.
+        # Convention: positive turn = RIGHT (matches classify.py).
+        self._turnL_active = self._hyst(self._turnL_active,
+                                        -self._yaw_angle_deg,
+                                        c.turn_on_deg, c.turn_off_deg)
+        self._turnR_active = self._hyst(self._turnR_active,
+                                        self._yaw_angle_deg,
+                                        c.turn_on_deg, c.turn_off_deg)
 
         return {
             "turn": turn,
@@ -276,14 +413,17 @@ class MovementMapper:
             "lean_active": self._lean_active,
             "liftL_active": self._liftL_active,
             "liftR_active": self._liftR_active,
-            "turn_active": self._turn_active,
+            "turnL_active": self._turnL_active,
+            "turnR_active": self._turnR_active,
         }
 
 
 if __name__ == "__main__":
-    # tiny self-check with a fabricated neutral sample (gravity on lumbar X)
+    # tiny self-check with a fabricated neutral sample (gravity on lumbar
+    # and cervical X)
     neutral = {k: 0.0 for k in CHANNELS}
     neutral["ax0"] = 0.99
+    neutral["ax1"] = 0.99
     neutral["az3"] = 0.99
     neutral["az4"] = 0.99
     cal = calibrate_neutral([neutral] * 20)
