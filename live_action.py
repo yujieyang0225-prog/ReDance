@@ -597,7 +597,7 @@ def list_ports():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("live", "simulate", "mujoco"),
-                        default="simulate")
+                        default="mujoco")
     args = parser.parse_args()
 
     if args.mode == "simulate":
