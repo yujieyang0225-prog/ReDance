@@ -160,7 +160,7 @@ class RoutineGame:
     def update(self, label, features=None):
         # Call every sample/frame with the current label. Returns an event
         # string or None:
-        #   "correct", "wrong", "step_complete", "routine_complete"
+        #   "correct", "calib_reward", "step_complete", "routine_complete"
         step = self._step
         kind = step["kind"]
         now = time.time()

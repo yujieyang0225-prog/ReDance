@@ -1,7 +1,9 @@
 import os
 import sys
+import csv
 import json
 import time
+import datetime
 import threading
 import argparse
 
@@ -12,7 +14,8 @@ except ImportError:
     serial = None
 
 from mapping import (
-    REQUIRED_CHANNELS, parse_line, calibrate_neutral, MovementMapper,
+    CHANNELS, REQUIRED_CHANNELS, parse_line, calibrate_neutral,
+    MovementMapper,
 )
 from classify import (
     ActionClassifier, NEUTRAL, LEAN, LIFT_L, LIFT_R, TURN_LEFT, TURN_RIGHT,
@@ -126,6 +129,77 @@ SIM_KEY_TO_LABEL = {
     "y": TURN_RIGHT,
 }
 
+# Session data logging (modeled on the old datalogger, imu_collect.py):
+# one timestamped folder per session under logs/game_sessions/, continuous
+# flushes so a crash loses at most a moment of data.
+LOG_BASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "logs", "game_sessions")
+LOG_FLUSH_EVERY = 50          # sample rows between flushes (~1.3 s live)
+
+
+class SessionLogger:
+    # samples.csv: one row per classifier sample -- raw IMU channels (live
+    # mode; empty otherwise), normalized features, label and game context.
+    # events.csv: one row per game event (correct / calib / step / routine).
+    def __init__(self):
+        self._lock = threading.Lock()
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.folder = os.path.join(LOG_BASE_DIR, "session_" + stamp)
+        os.makedirs(self.folder, exist_ok=True)
+        self._t0 = time.perf_counter()
+        self._sf = open(os.path.join(self.folder, "samples.csv"),
+                        "w", newline="")
+        self._sw = csv.writer(self._sf)
+        self._sw.writerow(["t_s"] + CHANNELS +
+                          ["lean", "lift_L", "lift_R", "turn", "label",
+                           "phase", "step_index", "step_name", "score"])
+        self._ef = open(os.path.join(self.folder, "events.csv"),
+                        "w", newline="")
+        self._ew = csv.writer(self._ef)
+        self._ew.writerow(["t_s", "event", "phase", "step_index",
+                           "step_name", "score", "rounds"])
+        self._n = 0
+        self.active = True
+
+    def log_sample(self, values, features, label, game):
+        if not self.active:
+            return
+        row = [round(time.perf_counter() - self._t0, 4)]
+        row += [(values.get(k, "") if values else "") for k in CHANNELS]
+        row += [round(features.get(k, 0.0), 4)
+                for k in ("lean", "lift_L", "lift_R", "turn")]
+        row += [label, game["phase"], game["step_index"],
+                game["step_name"], game["score"]]
+        with self._lock:
+            if not self.active:
+                return
+            self._sw.writerow(row)
+            self._n += 1
+            if self._n % LOG_FLUSH_EVERY == 0:
+                self._sf.flush()
+
+    def log_event(self, event, game):
+        if not self.active:
+            return
+        with self._lock:
+            if not self.active:
+                return
+            self._ew.writerow([round(time.perf_counter() - self._t0, 4),
+                               event, game["phase"], game["step_index"],
+                               game["step_name"], game["score"],
+                               game["rounds_completed"]])
+            self._ef.flush()
+
+    def close(self):
+        with self._lock:
+            if not self.active:
+                return
+            self.active = False
+            self._sf.flush()
+            self._sf.close()
+            self._ef.flush()
+            self._ef.close()
+
 
 def render_routine_html(game):
     # Current phase + step with live progress, and a peek at the next step.
@@ -161,6 +235,7 @@ class SimulationClassifier(threading.Thread):
         self._calib_start = time.perf_counter()
         self._last_write = 0.0
         self._last_step_kind = None
+        self.logger = None            # SessionLogger, set by the GUI
 
     def open(self):
         return None
@@ -226,6 +301,10 @@ class SimulationClassifier(threading.Thread):
                     recalib_now = (kind == "calib"
                                    and self._last_step_kind != "calib")
                     self._last_step_kind = kind
+                    lg = self.logger
+                    if lg is not None:
+                        lg.log_sample(None, self.features, self.label,
+                                      self.game.snapshot())
             if recalib_now:
                 self.recalibrate()   # takes the lock itself
             self._write_state()
@@ -306,6 +385,7 @@ class MujocoMotionClassifier(threading.Thread):
         self._last_ts = 0.0
         self._last_write = 0.0
         self._last_step_kind = None
+        self.logger = None            # SessionLogger, set by the GUI
 
     def open(self):
         return None
@@ -403,6 +483,10 @@ class MujocoMotionClassifier(threading.Thread):
                     recalib_now = (kind == "calib"
                                    and self._last_step_kind != "calib")
                     self._last_step_kind = kind
+                    lg = self.logger
+                    if lg is not None:
+                        lg.log_sample(None, self.features, self.label,
+                                      self.game.snapshot())
             if recalib_now:
                 self.recalibrate()   # takes the lock itself
 
@@ -471,6 +555,7 @@ class LiveClassifier(threading.Thread):
         self._classifier = None
         self._last_write = 0.0
         self._last_step_kind = None
+        self.logger = None            # SessionLogger, set by the GUI
 
     def open(self):
         if serial is None:
@@ -544,6 +629,10 @@ class LiveClassifier(threading.Thread):
                     recalib_now = (kind == "calib"
                                    and self._last_step_kind != "calib")
                     self._last_step_kind = kind
+                    lg = self.logger
+                    if lg is not None:
+                        lg.log_sample(values, self.features, self.label,
+                                      self.game.snapshot())
                 if recalib_now:
                     self.recalibrate()   # takes the lock itself
 
@@ -950,6 +1039,46 @@ def main():
     btn.clicked.connect(reader.recalibrate)
     left.addWidget(btn)
 
+    # ---- session data logging (start button; auto-stop on completion) ----
+    session_logger = [None]
+
+    log_btn = QtWidgets.QPushButton("● Aufzeichnung starten")
+    log_btn.setStyleSheet(
+        "QPushButton{color:#cfd3d8; background:#1c1f26; border:none;"
+        "padding:9px; border-radius:8px; font-size:13px;}"
+        "QPushButton:hover{background:#262a33;}")
+    left.addWidget(log_btn)
+
+    log_label = QtWidgets.QLabel("")
+    log_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+    log_label.setStyleSheet("color:#7f8791; font-size:12px;")
+    log_label.setWordWrap(True)
+    left.addWidget(log_label)
+
+    def finish_logging():
+        lg = session_logger[0]
+        if lg is None:
+            return
+        reader.logger = None
+        lg.close()
+        session_logger[0] = None
+        log_btn.setText("● Aufzeichnung starten")
+        log_label.setText("Gespeichert: " + lg.folder)
+        log_label.setStyleSheet("color:#27ae60; font-size:12px;")
+
+    def toggle_logging():
+        if session_logger[0] is None:
+            lg = SessionLogger()
+            session_logger[0] = lg
+            reader.logger = lg
+            log_btn.setText("■ Aufzeichnung stoppen")
+            log_label.setText("● Aufzeichnung läuft…")
+            log_label.setStyleSheet("color:#e74c3c; font-size:12px;")
+        else:
+            finish_logging()
+
+    log_btn.clicked.connect(toggle_logging)
+
     reward_flash = RewardFlash(win)
     handled_event_ts = [0.0]
 
@@ -985,6 +1114,11 @@ def main():
             # across the whole 3 s break so it never feels idle
             long_pop = game.get("step_kind") == "calib"
             reward_flash.pop(text, color, 3000 if long_pop else 1200)
+            if session_logger[0] is not None:
+                session_logger[0].log_event(event, game)
+            if event == "routine_complete":
+                # last task done: stop logging and save automatically
+                finish_logging()
         if event is not None and time.time() - event_ts < EVENT_FLASH_SECONDS:
             text, color = EVENT_DISPLAY.get(event, (event, "#cfd3d8"))
             flash_label.setText(text)
@@ -1028,6 +1162,7 @@ def main():
     timer.timeout.connect(update)
     timer.start(GUI_UPDATE_MS)
 
+    app.aboutToQuit.connect(finish_logging)   # save if closed mid-recording
     app.aboutToQuit.connect(reader.stop)
     win.show()
     win.raise_()
