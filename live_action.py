@@ -6,6 +6,7 @@ import time
 import datetime
 import threading
 import argparse
+import math
 
 try:
     import serial
@@ -29,7 +30,7 @@ from game import (
 # ---------------------------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------------------------
-SERIAL_PORT = "/dev/cu.usbserial-59690891081"   # find yours with:  ls /dev/cu.*
+SERIAL_PORT = "COM11"   # find yours with:  ls /dev/cu.*
 BAUD = 115200
 CALIB_SECONDS = 2.0                      # neutral hold at startup
 GUI_UPDATE_MS = 50
@@ -685,14 +686,12 @@ def list_ports():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=("live", "simulate", "mujoco"),
-                        default="mujoco")
+    parser.add_argument("--mode", choices=("live", "simulate"),
+                        default="live")
     args = parser.parse_args()
 
     if args.mode == "simulate":
         reader = SimulationClassifier()
-    elif args.mode == "mujoco":
-        reader = MujocoMotionClassifier()
     else:
         # the board may still be (re-)enumerating -- USB serial ports can
         # flap for a few seconds after plugging in; wait instead of dying
@@ -720,8 +719,123 @@ def main():
     from PyQt6.QtCore import QUrl
     from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
     from PyQt6.QtMultimediaWidgets import QVideoWidget
+    from PyQt6.QtGui import QPixmap, QImage
+    
+    # Try to import mujoco for avatar rendering
+    try:
+        import mujoco
+        _mujoco_available = True
+    except ImportError:
+        _mujoco_available = False
+        mujoco = None
 
     app = pg.mkQApp("Live action")
+    
+    # Embedded MuJoCo avatar renderer for live mode
+    class AvatarPanel(QtWidgets.QWidget):
+        def __init__(self):
+            super().__init__()
+            self._mujoco_ok = False
+            self._model = None
+            self._data = None
+            self._renderer = None
+            self._joint_ids = {}
+            
+            layout = QtWidgets.QVBoxLayout(self)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(0)
+            
+            title = QtWidgets.QLabel("Avatar")
+            title.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            title.setStyleSheet("color:#e5e7eb; font-size:14px; font-weight:700;")
+            layout.addWidget(title)
+            
+            self._image = QtWidgets.QLabel()
+            self._image.setMinimumSize(280, 280)
+            self._image.setStyleSheet("background:#1c1f26;")
+            self._image.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(self._image, stretch=1)
+            
+            if _mujoco_available and mujoco is not None:
+                try:
+                    xml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                           "professional_rehab_avatar.xml")
+                    self._model = mujoco.MjModel.from_xml_path(xml_path)
+                    self._data = mujoco.MjData(self._model)
+                    self._joint_ids = {
+                        "torso_rotation": self._model.joint("torso_rotation").qposadr[0],
+                        "torso_bend": self._model.joint("torso_bend").qposadr[0],
+                        "head": self._model.joint("head_rotation").qposadr[0],
+                        "left_hip": self._model.joint("left_hip_lift").qposadr[0],
+                        "right_hip": self._model.joint("right_hip_lift").qposadr[0],
+                        "left_shoulder": self._model.joint("left_shoulder").qposadr[0],
+                        "right_shoulder": self._model.joint("right_shoulder").qposadr[0],
+                    }
+                    self._renderer = mujoco.Renderer(self._model, 280, 280)
+                    self._mujoco_ok = True
+                except Exception as e:
+                    print("Avatar rendering error:", e)
+                    self._mujoco_ok = False
+            
+            if not self._mujoco_ok:
+                self._image.setText("(avatar unavailable)")
+                self._image.setStyleSheet("background:#1c1f26; color:#7f8791;")
+
+        def update_from_state(self, label, features):
+            if not self._mujoco_ok:
+                return
+            
+            try:
+                # Reset all angles to neutral
+                angles = {
+                    "torso_rotation": 0.0,
+                    "torso_bend": 0.0,
+                    "head": 0.0,
+                    "left_hip": 0.0,
+                    "right_hip": 0.0,
+                }
+                
+                # Map label to joint angles (same logic as run_professional_rehab.py)
+                if label == LEAN:
+                    angles["torso_bend"] = LEAN_MAX_DEG * features.get("lean", 0.0)
+                elif label == LIFT_L:
+                    angles["left_hip"] = -LIFT_MAX_DEG * features.get("lift_L", 0.0)
+                elif label == LIFT_R:
+                    angles["right_hip"] = -LIFT_MAX_DEG * features.get("lift_R", 0.0)
+                elif label == TURN_LEFT:
+                    angle = TURN_MAX_DEG * abs(features.get("turn", 0.0))
+                    angles["torso_rotation"] = angle
+                    angles["head"] = angle
+                elif label == TURN_RIGHT:
+                    angle = -TURN_MAX_DEG * abs(features.get("turn", 0.0))
+                    angles["torso_rotation"] = angle
+                    angles["head"] = angle
+                
+                # Apply angles to model (convert degrees to radians)
+                for key, angle_deg in angles.items():
+                    if key in self._joint_ids:
+                        self._data.qpos[self._joint_ids[key]] = math.radians(angle_deg)
+                
+                # Shoulders always at rest
+                self._data.qpos[self._joint_ids["left_shoulder"]] = 0.0
+                self._data.qpos[self._joint_ids["right_shoulder"]] = 0.0
+                
+                # Compute forward kinematics
+                mujoco.mj_forward(self._model, self._data)
+                
+                # Render offscreen to numpy array
+                self._renderer.update_scene(self._data)
+                img = self._renderer.render()
+                
+                # Convert RGB numpy array to Qt image
+                if img is not None and len(img.shape) == 3:
+                    h, w = img.shape[:2]
+                    bytes_per_line = 3 * w
+                    q_img = QImage(img.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+                    pm = QPixmap.fromImage(q_img)
+                    self._image.setPixmap(pm)
+            except Exception as e:
+                print("Avatar update error:", e)
 
     # background music: loops for the whole session, ends with the window
     music_player = None
@@ -925,8 +1039,6 @@ def main():
     win = ControlWindow(reader, args.mode == "simulate")
     if args.mode == "simulate":
         win.setWindowTitle("Bewegungserkennung – Simulation")
-    elif args.mode == "mujoco":
-        win.setWindowTitle("Bewegungserkennung – MuJoCo")
     else:
         win.setWindowTitle("Bewegungserkennung")
     win.resize(1120, 560)
@@ -935,43 +1047,53 @@ def main():
     root.setContentsMargins(20, 20, 20, 20)
     root.setSpacing(18)
 
+    # Three-column layout: left (avatar) | center (status/game) | right (video)
     left = QtWidgets.QVBoxLayout()
     left.setSpacing(16)
-    root.addLayout(left, 3)
+    root.addLayout(left, 2)
+    
+    center = QtWidgets.QVBoxLayout()
+    center.setSpacing(16)
+    root.addLayout(center, 3)
 
     right = QtWidgets.QVBoxLayout()
     right.setSpacing(10)
     root.addLayout(right, 2)
 
+    # Left: avatar panel (only in live mode)
+    avatar_panel = None
+    if args.mode == "live":
+        avatar_panel = AvatarPanel()
+        left.addWidget(avatar_panel, stretch=1)
+    
+    # Right: video panel
     video_panel = InstructionVideoPlayer(VIDEO_PATH)
     right.addWidget(video_panel, stretch=1)
 
+    # Center: status, sequence, score, bars, buttons
     if args.mode == "simulate":
         _status0 = "Simulation: bitte warten\u2026"
-    elif args.mode == "mujoco":
-        _status0 = "Warte auf den MuJoCo-Avatar\u2026"
     else:
         _status0 = "Bitte still halten \u2014 Kalibrierung\u2026"
     status = QtWidgets.QLabel(_status0)
     status.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
     status.setStyleSheet("color:#9aa0a8; font-size:15px;")
-    left.addWidget(status)
+    center.addWidget(status)
 
     if args.mode == "simulate":
         hint = QtWidgets.QLabel("Tasten: Q=Ruhe, W=Beugen, E=Bein links, R=Bein rechts, T=Drehen links, Y=Drehen rechts")
         hint.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         hint.setStyleSheet("color:#7f8791; font-size:12px;")
         hint.setWordWrap(True)
-        left.addWidget(hint)
-    elif args.mode == "mujoco":
+        center.addWidget(hint)
+    elif args.mode == "live":
         hint = QtWidgets.QLabel(
-            "Avatar mit den Tasten 1-5 steuern (je eine Wiederholung) — "
-            "seine Bewegung wird hier live erkannt. Links/rechts ist aus "
-            "Sicht des Avatars (der Bildschirm zeigt ein Spiegelbild).")
+            "IMU-Sensor an COM11 erklärt Bewegungen. Der Avatar zeigt die erkannte "
+            "Bewegung live an. Links/rechts ist aus Sicht des Avatars (Spiegelbild).")
         hint.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         hint.setStyleSheet("color:#7f8791; font-size:12px;")
         hint.setWordWrap(True)
-        left.addWidget(hint)
+        center.addWidget(hint)
 
     # The routine (expected sequence) and score are the PROMINENT display;
     # the currently recognized movement is the small readout below the bars.
@@ -980,13 +1102,13 @@ def main():
     seq_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
     seq_label.setStyleSheet("font-size:15px;")
     seq_label.setWordWrap(True)
-    left.addWidget(seq_label, stretch=1)
+    center.addWidget(seq_label, stretch=1)
 
     score_label = QtWidgets.QLabel("Punkte: 0   Runden: 0")
     score_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
     score_label.setStyleSheet(
         "color:#e5e7eb; font-size:28px; font-weight:800;")
-    left.addWidget(score_label)
+    center.addWidget(score_label)
 
     bars = {}
     grid = QtWidgets.QGridLayout()
@@ -1001,7 +1123,7 @@ def main():
             ("lift_R", "Bein rechts"), ("turn_L", "Drehen links"),
             ("turn_R", "Drehen rechts")]):
         lab = QtWidgets.QLabel(name)
-        lab.setStyleSheet("color:#cfd3d8; font-size:13px;") #check
+        lab.setStyleSheet("color:#cfd3d8; font-size:13px;")
         bar = ThresholdBar(BAR_THRESHOLDS[key])
         bar.setRange(0, 100)
         bar.setTextVisible(False)
@@ -1012,23 +1134,21 @@ def main():
         grid.addWidget(lab, r, 0)
         grid.addWidget(bar, r, 1)
         bars[key] = bar
-    left.addLayout(grid)
+    center.addLayout(grid)
 
     big = QtWidgets.QLabel("—")   # currently recognized movement (small)
     big.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
     big.setStyleSheet("color:#8a8f98; font-size:18px; font-weight:600;")
     big.setWordWrap(True)
-    left.addWidget(big)
+    center.addWidget(big)
 
     flash_label = QtWidgets.QLabel("")
     flash_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
     flash_label.setStyleSheet("font-size:13px; font-weight:600;")
-    left.addWidget(flash_label)
+    center.addWidget(flash_label)
 
     if args.mode == "simulate":
         _btn_text = "Neu kalibrieren (Simulation neu starten)"
-    elif args.mode == "mujoco":
-        _btn_text = "Neu kalibrieren (Avatar in Ruhelage)"
     else:
         _btn_text = "Neu kalibrieren (bitte still sitzen)"
     btn = QtWidgets.QPushButton(_btn_text)
@@ -1037,7 +1157,7 @@ def main():
         "padding:9px; border-radius:8px; font-size:13px;}"
         "QPushButton:hover{background:#262a33;}")
     btn.clicked.connect(reader.recalibrate)
-    left.addWidget(btn)
+    center.addWidget(btn)
 
     # ---- session data logging (start button; auto-stop on completion) ----
     session_logger = [None]
@@ -1047,13 +1167,13 @@ def main():
         "QPushButton{color:#cfd3d8; background:#1c1f26; border:none;"
         "padding:9px; border-radius:8px; font-size:13px;}"
         "QPushButton:hover{background:#262a33;}")
-    left.addWidget(log_btn)
+    center.addWidget(log_btn)
 
     log_label = QtWidgets.QLabel("")
     log_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
     log_label.setStyleSheet("color:#7f8791; font-size:12px;")
     log_label.setWordWrap(True)
-    left.addWidget(log_label)
+    center.addWidget(log_label)
 
     def finish_logging():
         lg = session_logger[0]
@@ -1088,10 +1208,11 @@ def main():
         if error is not None:
             status.setText("Sensor-Fehler: " + error)
             return
-        if args.mode == "mujoco" and getattr(reader, "waiting", False):
-            status.setText(
-                "Warte auf den Avatar — bitte run_professional_rehab.py starten")
-            return
+        
+        # Update avatar panel if present
+        if avatar_panel is not None:
+            avatar_panel.update_from_state(label, feats)
+        
         video_panel.set_segment(game["step_name"], game.get("video_segment"))
         score_label.setText(
             "Punkte: %d   Runden: %d" % (game["score"], game["rounds_completed"]))
@@ -1129,14 +1250,11 @@ def main():
         if state == "calibrating":
             remaining = max(0.0, CALIB_SECONDS * (1.0 - progress))
             if args.mode == "simulate":
-                status.setText("Simulation: bitte warten\u2026  %.1f s" % remaining)
-            elif args.mode == "mujoco":
-                status.setText(
-                    "Avatar ruhig lassen \u2014 Kalibrierung\u2026  %.1f s" % remaining)
+                status.setText("Simulation: bitte warten… %.1f s" % remaining)
             else:
                 status.setText(
-                    "Bitte ruhig sitzen \u2014 Kalibrierung l\u00e4uft\u2026  %.1f s" % remaining)
-            big.setText("\u2014")
+                    "Bitte ruhig sitzen — Kalibrierung läuft… %.1f s" % remaining)
+            big.setText("—")
             big.setStyleSheet(
                 "color:#8a8f98; font-size:18px; font-weight:600;")
             for b in bars.values():
@@ -1144,8 +1262,6 @@ def main():
             return
         if args.mode == "simulate":
             status.setText("Simulation: Bewegung erkannt")
-        elif args.mode == "mujoco":
-            status.setText("Avatar-Bewegung wird erkannt")
         else:
             status.setText("Ihre Bewegung wird erkannt")
         text, color = DISPLAY.get(label, (label, "#cfd3d8"))
