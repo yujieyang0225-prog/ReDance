@@ -32,6 +32,11 @@ BONUS_ON_COMPLETE = 100
 
 CALIB_STEP_SECONDS = 3.0
 
+# Sequence progression gates. Keep in sync with classify.py thresholds so
+# the routine uses the same movement intensity criterion as recognition.
+SEQ_TILT_GATE = 0.45
+SEQ_TURN_GATE = 0.35
+
 
 def _hold(name, label, seconds, video=None):
     return {"kind": "hold", "name": name, "label": label,
@@ -56,6 +61,24 @@ def _calib():
     # No video: the instruction video pauses while the player sits still.
     return {"kind": "calib", "name": "Kalibrierung – bitte still sitzen",
             "seconds": CALIB_STEP_SECONDS, "video": None}
+
+
+def _seq_signal_for_label(label, features):
+    # Convert expected seq label to a scalar signal and its gate.
+    # Extra simultaneous features are intentionally ignored.
+    features = features or {}
+    if label == LEAN:
+        return max(0.0, float(features.get("lean", 0.0))), SEQ_TILT_GATE
+    if label == LIFT_L:
+        return max(0.0, float(features.get("lift_L", 0.0))), SEQ_TILT_GATE
+    if label == LIFT_R:
+        return max(0.0, float(features.get("lift_R", 0.0))), SEQ_TILT_GATE
+    turn = float(features.get("turn", 0.0))
+    if label == TURN_LEFT:
+        return max(0.0, -turn), SEQ_TURN_GATE
+    if label == TURN_RIGHT:
+        return max(0.0, turn), SEQ_TURN_GATE
+    return 0.0, 1.0
 
 
 TIPTOES = (LIFT_L, LIFT_R, LIFT_L, LIFT_R, LIFT_L, LIFT_R)
@@ -117,6 +140,7 @@ class RoutineGame:
         self._hold_start = None
         self._timed_start = None
         self._prev_label = NEUTRAL
+        self._seq_trigger_armed = True
 
     @property
     def _step(self):
@@ -138,6 +162,7 @@ class RoutineGame:
         # a same-position hold from before the classifier was reset.
         self._prev_label = NEUTRAL
         self._hold_start = None
+        self._seq_trigger_armed = True
 
     def _advance(self):
         self.score += POINTS_STEP_COMPLETE
@@ -145,6 +170,7 @@ class RoutineGame:
         self._count = 0
         self._hold_start = None
         self._timed_start = None
+        self._seq_trigger_armed = True
         if self._i >= len(self.routine):
             self.score += BONUS_ON_COMPLETE
             self.rounds_completed += 1
@@ -164,7 +190,6 @@ class RoutineGame:
         step = self._step
         kind = step["kind"]
         now = time.time()
-        is_move = self._prev_label == NEUTRAL and label != NEUTRAL
         self._prev_label = label
 
         if kind == "hold":
@@ -199,15 +224,18 @@ class RoutineGame:
             return None
 
         if kind == "seq":
-            if is_move:
-                if label == step["labels"][self._count]:
-                    self._count += 1
-                    self.score += POINTS_PER_REP
-                    if self._count >= len(step["labels"]):
-                        return self._advance()
-                    return "correct"
-                # a non-matching move is simply ignored -- no punishment,
-                # the player keeps their progress and tries again
+            expected = step["labels"][self._count]
+            signal, gate = _seq_signal_for_label(expected, features)
+            if signal < gate:
+                self._seq_trigger_armed = True
+                return None
+            if self._seq_trigger_armed:
+                self._seq_trigger_armed = False
+                self._count += 1
+                self.score += POINTS_PER_REP
+                if self._count >= len(step["labels"]):
+                    return self._advance()
+                return "correct"
             return None
 
         return None

@@ -786,30 +786,20 @@ def main():
                 return
             
             try:
-                # Reset all angles to neutral
+                lean = max(0.0, min(1.0, float(features.get("lean", 0.0))))
+                lift_l = max(0.0, min(1.0, float(features.get("lift_L", 0.0))))
+                lift_r = max(0.0, min(1.0, float(features.get("lift_R", 0.0))))
+                turn = max(-1.0, min(1.0, float(features.get("turn", 0.0))))
+
+                # Drive joints directly from features so simultaneous motions
+                # (e.g. bend + turn) are visible without label lockout.
                 angles = {
-                    "torso_rotation": 0.0,
-                    "torso_bend": 0.0,
-                    "head": 0.0,
-                    "left_hip": 0.0,
-                    "right_hip": 0.0,
+                    "torso_bend": LEAN_MAX_DEG * lean,
+                    "left_hip": -LIFT_MAX_DEG * lift_l,
+                    "right_hip": -LIFT_MAX_DEG * lift_r,
+                    "torso_rotation": -TURN_MAX_DEG * turn,
+                    "head": -TURN_MAX_DEG * turn,
                 }
-                
-                # Map label to joint angles (same logic as run_professional_rehab.py)
-                if label == LEAN:
-                    angles["torso_bend"] = LEAN_MAX_DEG * features.get("lean", 0.0)
-                elif label == LIFT_L:
-                    angles["left_hip"] = -LIFT_MAX_DEG * features.get("lift_L", 0.0)
-                elif label == LIFT_R:
-                    angles["right_hip"] = -LIFT_MAX_DEG * features.get("lift_R", 0.0)
-                elif label == TURN_LEFT:
-                    angle = TURN_MAX_DEG * abs(features.get("turn", 0.0))
-                    angles["torso_rotation"] = angle
-                    angles["head"] = angle
-                elif label == TURN_RIGHT:
-                    angle = -TURN_MAX_DEG * abs(features.get("turn", 0.0))
-                    angles["torso_rotation"] = angle
-                    angles["head"] = angle
                 
                 # Apply angles to model (convert degrees to radians)
                 for key, angle_deg in angles.items():
