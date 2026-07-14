@@ -175,6 +175,7 @@ ROUTINE = [
     ("Aufwärmen", _timed("Rechtes Füße kreisen", 16.0, video="rotate_right.mp4")),
     ("Aufwärmen", _timed("Linkes Füße kreisen", 16.0, video="rotate_left.mp4")),
     # ----- Dance (3 s calibration reward between sections) -----
+    ("Tanz", _calib()),
     ("Tanz", _seq("Rechtes Bein heben", ((LIFT_R,),) * 3, video="tiptoe_right.mp4")),
     ("Tanz", _calib()),
     ("Tanz", _seq("Linkes Bein heben", ((LIFT_L,),) * 3, video="tiptoe_left.mp4")),

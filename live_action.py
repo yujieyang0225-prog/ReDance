@@ -7,6 +7,7 @@ import datetime
 import threading
 import argparse
 import math
+import subprocess
 
 try:
     import serial
@@ -24,8 +25,7 @@ from classify import (
     LEAN_GATE, LIFT_L_GATE, LIFT_R_GATE, TURN_L_GATE, TURN_R_GATE,
 )
 from game import (
-    RoutineGame, POINTS_PER_REP, POINTS_CALIB, POINTS_STEP_COMPLETE,
-    BONUS_ON_COMPLETE, video_folder,
+    RoutineGame, video_folder,
 )
 
 # ---------------------------------------------------------------------------
@@ -63,61 +63,53 @@ DISPLAY = {
     TURN_RIGHT: ("Nach rechts drehen ↻", "#16a085"),
 }
 
-# how each game event is flashed: (text, color)
-EVENT_DISPLAY = {
-    "correct": ("+%d" % POINTS_PER_REP, "#27ae60"),
-    "calib_reward": ("Kalibriert!  +%d" % POINTS_CALIB, "#3b9ea5"),
-    "step_complete": ("★ Übung geschafft!  +%d ★" % POINTS_STEP_COMPLETE,
-                      "#27ae60"),
-    "step_skipped": ("Übung übersprungen", "#e67e22"),
-    "calib_step_complete": ("Kalibrierung geschafft", "#3b9ea5"),
-    "calib_step_skipped": ("Kalibrierung übersprungen", "#e67e22"),
-    "routine_complete": ("Glückwunsch — alles geschafft!  +%d Bonus"
-                         % BONUS_ON_COMPLETE, "#f1c40f"),
-}
-EVENT_FLASH_SECONDS = 1.5
-
-# Achievement sounds: short chimes synthesized to WAV on first run, so the
-# repo needs no binary audio assets. event -> (filename, [(freq_hz, dur_s)])
+# Spoken reward audio files, generated on first run when missing.
 SOUND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sounds")
 EVENT_SOUNDS = {
-    "correct": ("reward.wav", [(880.0, 0.09), (1174.7, 0.14)]),
-    "calib_reward": ("calib.wav", [(659.3, 0.09), (880.0, 0.14)]),
-    "step_complete": ("step.wav",
-                      [(523.3, 0.09), (659.3, 0.09), (784.0, 0.16)]),
-    "routine_complete": ("fanfare.wav",
-                         [(523.3, 0.12), (659.3, 0.12), (784.0, 0.12),
-                          (1046.5, 0.30)]),
+    "correct": ("super.wav", "Super!"),
+    "calib_reward": ("perfekt.wav", "Perfekt!"),
+    "step_complete": ("perfekt.wav", "Perfekt!"),
+    "routine_complete": ("geschafft.wav", "Geschafft!"),
 }
 
 
 def ensure_event_sounds():
-    import wave
-    import struct
-    import math
     os.makedirs(SOUND_DIR, exist_ok=True)
-    rate = 22050
-    for fname, notes in EVENT_SOUNDS.values():
+    created = set()
+    for fname, spoken_text in EVENT_SOUNDS.values():
+        if fname in created:
+            continue
+        created.add(fname)
         path = os.path.join(SOUND_DIR, fname)
         if os.path.exists(path):
             continue
-        frames = []
-        for freq, dur in notes:
-            n = int(rate * dur)
-            for i in range(n):
-                env = (n - i) / n                    # decay
-                if i < 80:
-                    env *= i / 80.0                  # attack, avoids clicks
-                v = 0.45 * env * math.sin(2.0 * math.pi * freq * i / rate)
-                frames.append(struct.pack("<h", int(v * 32767)))
-        with wave.open(path, "w") as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)
-            w.setframerate(rate)
-            w.writeframes(b"".join(frames))
+        if os.name != "nt":
+            continue
+        escaped_path = path.replace("'", "''")
+        escaped_text = spoken_text.replace("'", "''")
+        command = (
+            "Add-Type -AssemblyName System.Speech;"
+            "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+            "$s.Rate = 0;"
+            "$s.Volume = 100;"
+            "$s.SetOutputToWaveFile('%s');"
+            "$s.Speak('%s');"
+            "$s.Dispose()" % (escaped_path, escaped_text)
+        )
+        try:
+            subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                 "-Command", command],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except Exception:
+            pass
 
 VIDEO_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             video_folder)
+STILL_IMAGE_PATH = os.path.join(VIDEO_FOLDER, "still_position.jpg")
 # Background music: loops from game start until the window is closed.
 MUSIC_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "rehab_music.mp3")
@@ -1180,6 +1172,7 @@ def main():
         def __init__(self, video_folder):
             super().__init__()
             self._video_folder = video_folder
+            self._still_image_path = STILL_IMAGE_PATH
             self._displayed_key = None
             self._current_path = None
             self._loop_current = False
@@ -1195,11 +1188,23 @@ def main():
             title.setStyleSheet("color:#e5e7eb; font-size:16px; font-weight:700;")
             layout.addWidget(title)
 
+            self._video_stack_host = QtWidgets.QWidget()
+            self._video_stack = QtWidgets.QStackedLayout(self._video_stack_host)
+            self._video_stack.setContentsMargins(0, 0, 0, 0)
+
+            self._placeholder = QtWidgets.QLabel()
+            self._placeholder.setMinimumSize(420, 240)
+            self._placeholder.setStyleSheet("background:#000000;")
+            self._placeholder.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+
             self._video_widget = QVideoWidget()
             self._video_widget.setMinimumSize(420, 240)
             self._video_widget.setStyleSheet("background:#000000;")
             self._video_widget.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
-            layout.addWidget(self._video_widget, stretch=1)
+
+            self._video_stack.addWidget(self._placeholder)
+            self._video_stack.addWidget(self._video_widget)
+            layout.addWidget(self._video_stack_host, stretch=1)
 
             self._status = QtWidgets.QLabel()
             self._status.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
@@ -1215,7 +1220,34 @@ def main():
             self._player.mediaStatusChanged.connect(self._on_media_status_changed)
             self._ended = False
 
+            self._update_placeholder_pixmap()
+            self._show_placeholder()
             self._status.setText("")
+
+        def resizeEvent(self, event):
+            super().resizeEvent(event)
+            self._update_placeholder_pixmap()
+
+        def _update_placeholder_pixmap(self):
+            if not os.path.exists(self._still_image_path):
+                self._placeholder.setText("")
+                return
+            pixmap = QPixmap(self._still_image_path)
+            if pixmap.isNull():
+                self._placeholder.setText("")
+                return
+            scaled = pixmap.scaled(
+                self._placeholder.size(),
+                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            )
+            self._placeholder.setPixmap(scaled)
+
+        def _show_placeholder(self):
+            self._video_stack.setCurrentWidget(self._placeholder)
+
+        def _show_video(self):
+            self._video_stack.setCurrentWidget(self._video_widget)
 
         def _resolve_path(self, filename):
             if not filename:
@@ -1231,9 +1263,11 @@ def main():
             self._current_path = path
             if path is None or not os.path.exists(path):
                 self._player.setSource(QUrl())
+                self._show_placeholder()
                 self._status.setText("Videodatei nicht gefunden: " + str(filename))
                 return
             self._player.setSource(QUrl.fromLocalFile(path))
+            self._show_video()
             self._status.setText("")
 
         def set_video(self, name, filename, step_kind):
@@ -1243,13 +1277,13 @@ def main():
             self._displayed_key = key
             self._loop_current = (step_kind == "seq")
             if step_kind == "calib":
-                if not self._player.source().isEmpty():
-                    self._player.setPosition(0)
                 self._player.pause()
+                self._show_placeholder()
                 self._status.setText("")
                 return
             if filename is None:
                 self._player.pause()
+                self._show_placeholder()
                 self._status.setText("")
                 return
             self._load_video(filename)
@@ -1257,6 +1291,7 @@ def main():
                 return
             self._status.setText("")
             if not self._paused or self._ended:
+                self._show_video()
                 self._player.setPosition(0)
                 self._player.play()
                 self._ended = False
@@ -1266,33 +1301,37 @@ def main():
         def pause(self):
             self._paused = True
             self._player.pause()
+            if self._player.source().isEmpty() or not self._loop_current:
+                self._show_placeholder()
 
         def play(self):
             self._paused = False
             self._ended = False
             if self._player.source().isEmpty():
+                self._show_placeholder()
                 return
             if self._seek_on_resume:
                 self._player.setPosition(0)
                 self._seek_on_resume = False
             elif self._player.position() >= max(0, self._player.duration() - 1):
                 self._player.setPosition(0)
+            self._show_video()
             self._player.play()
 
         def _on_media_status_changed(self, status):
             if status == QMediaPlayer.MediaStatus.LoadedMedia and not self._paused:
+                self._show_video()
                 self._player.setPosition(0)
                 self._player.play()
             if status == QMediaPlayer.MediaStatus.EndOfMedia:
                 if self._loop_current and not self._paused:
+                    self._show_video()
                     self._player.setPosition(0)
                     self._player.play()
                     return
-                # Freeze on the last frame until the next step swaps in a new video.
                 self._ended = True
-                if self._player.duration() > 0:
-                    self._player.setPosition(max(0, self._player.duration() - 1))
                 self._player.pause()
+                self._show_placeholder()
 
 
     class ControlWindow(QtWidgets.QWidget):
@@ -1430,6 +1469,7 @@ def main():
     flash_label = QtWidgets.QLabel("")
     flash_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
     flash_label.setStyleSheet("font-size:13px; font-weight:600;")
+    flash_label.hide()
     center.addWidget(flash_label)
 
     if args.mode == "simulate":
@@ -1548,7 +1588,6 @@ def main():
     play_btn.setEnabled(False)
     skip_btn.setEnabled(False)
 
-    reward_flash = RewardFlash(win)
     handled_event_ts = [0.0]
 
     def update():
@@ -1603,31 +1642,19 @@ def main():
             b.set_active(bar_key in active_bars,
                          active_bars.get(bar_key))
         if event is not None and event_ts > handled_event_ts[0]:
-            # fire achievement sound + floating animation ONCE per event
+            # play spoken feedback ONCE per event
             handled_event_ts[0] = event_ts
             event_name = event.get("event")
             eff = sound_effects.get(event_name)
             if eff is not None:
                 eff.play()
-            text, color = EVENT_DISPLAY.get(event_name, (event_name, "#cfd3d8"))
-            # entering a calibration break: stretch the reward animation
-            # across the whole 3 s break so it never feels idle
-            long_pop = game.get("step_kind") == "calib"
-            reward_flash.pop(text, color, 3000 if long_pop else 1200)
             if session_logger[0] is not None:
                 session_logger[0].log_event(event_name, game,
                                             event.get("points", 0))
             if event_name == "routine_complete":
                 # last task done: stop logging and save automatically
                 finish_logging()
-        if event is not None and time.time() - event_ts < EVENT_FLASH_SECONDS:
-            event_name = event.get("event")
-            text, color = EVENT_DISPLAY.get(event_name, (event_name, "#cfd3d8"))
-            flash_label.setText(text)
-            flash_label.setStyleSheet(
-                "color:%s; font-size:13px; font-weight:600;" % color)
-        else:
-            flash_label.setText("")
+        flash_label.setText("")
         if state == "idle":
             if args.mode == "simulate":
                 status.setText("Bereit")
