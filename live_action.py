@@ -25,7 +25,7 @@ from classify import (
 )
 from game import (
     RoutineGame, POINTS_PER_REP, POINTS_CALIB, POINTS_STEP_COMPLETE,
-    BONUS_ON_COMPLETE,
+    BONUS_ON_COMPLETE, video_folder,
 )
 
 # ---------------------------------------------------------------------------
@@ -116,8 +116,8 @@ def ensure_event_sounds():
             w.setframerate(rate)
             w.writeframes(b"".join(frames))
 
-VIDEO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          "instruction_video.mp4")
+VIDEO_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            video_folder)
 # Background music: loops from game start until the window is closed.
 MUSIC_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "rehab_music.mp3")
@@ -1179,15 +1179,13 @@ def main():
             grp.start()
 
     class InstructionVideoPlayer(QtWidgets.QWidget):
-        # Loops the video segment attached to the CURRENT ROUTINE STEP
-        # (game.py defines start/stop per step), so repeated step names
-        # each play their own part of the choreography video.
-        def __init__(self, video_path):
+        # Plays the current step's video file once from the shared folder.
+        def __init__(self, video_folder):
             super().__init__()
-            self._video_path = video_path
+            self._video_folder = video_folder
             self._displayed_key = None
-            self._segment_start_ms = 0
-            self._segment_end_ms = 0
+            self._current_path = None
+            self._loop_current = False
             self._paused = True
             self._seek_on_resume = False
 
@@ -1217,38 +1215,54 @@ def main():
             self._audio.setMuted(True)
             self._player.setAudioOutput(self._audio)
             self._player.setVideoOutput(self._video_widget)
-            self._player.positionChanged.connect(self._on_position_changed)
             self._player.mediaStatusChanged.connect(self._on_media_status_changed)
+            self._ended = False
 
-            if os.path.exists(self._video_path):
-                self._player.setSource(QUrl.fromLocalFile(self._video_path))
-                self._status.setText("Das Video folgt der aktuellen Übung.")
-            else:
-                self._status.setText("Videodatei nicht gefunden: " + self._video_path)
+            self._status.setText("Das Video folgt der aktuellen Übung.")
 
-        def set_segment(self, name, segment):
-            # segment: (start_s, stop_s) from the routine step, or None to
-            # pause (calibration breaks)
-            key = (name, segment)
+        def _resolve_path(self, filename):
+            if not filename:
+                return None
+            if os.path.isabs(filename):
+                return filename
+            return os.path.join(self._video_folder, filename)
+
+        def _load_video(self, filename):
+            path = self._resolve_path(filename)
+            if path == self._current_path:
+                return
+            self._current_path = path
+            if path is None or not os.path.exists(path):
+                self._player.setSource(QUrl())
+                self._status.setText("Videodatei nicht gefunden: " + str(filename))
+                return
+            self._player.setSource(QUrl.fromLocalFile(path))
+            self._status.setText("Das Video folgt der aktuellen Übung.")
+
+        def set_video(self, name, filename, step_kind):
+            key = (name, filename, step_kind)
             if key == self._displayed_key:
                 return
             self._displayed_key = key
-            if segment is None:
-                self._segment_start_ms = 0
-                self._segment_end_ms = 0
+            self._loop_current = (step_kind == "seq")
+            if step_kind == "calib":
+                if not self._player.source().isEmpty():
+                    self._player.setPosition(0)
                 self._player.pause()
                 self._status.setText("Video pausiert: " + name)
                 return
-            start_s, end_s = segment
-            self._segment_start_ms = int(start_s * 1000)
-            self._segment_end_ms = int(end_s * 1000)
+            if filename is None:
+                self._player.pause()
+                self._status.setText("Video pausiert: " + name)
+                return
+            self._load_video(filename)
             if self._player.source().isEmpty():
-                self._status.setText("Video nicht verfügbar")
                 return
             self._status.setText("Video läuft: " + name)
-            if not self._paused:
-                self._player.setPosition(self._segment_start_ms)
+            if not self._paused or self._ended:
+                self._player.setPosition(0)
                 self._player.play()
+                self._ended = False
             else:
                 self._seek_on_resume = True
 
@@ -1258,23 +1272,30 @@ def main():
 
         def play(self):
             self._paused = False
+            self._ended = False
             if self._player.source().isEmpty():
                 return
             if self._seek_on_resume:
-                self._player.setPosition(self._segment_start_ms)
+                self._player.setPosition(0)
                 self._seek_on_resume = False
+            elif self._player.position() >= max(0, self._player.duration() - 1):
+                self._player.setPosition(0)
             self._player.play()
 
         def _on_media_status_changed(self, status):
             if status == QMediaPlayer.MediaStatus.LoadedMedia and not self._paused:
-                self._player.setPosition(self._segment_start_ms)
+                self._player.setPosition(0)
                 self._player.play()
-
-        def _on_position_changed(self, position):
-            if self._segment_end_ms <= self._segment_start_ms:
-                return
-            if position >= self._segment_end_ms:
-                self._player.setPosition(self._segment_start_ms)
+            if status == QMediaPlayer.MediaStatus.EndOfMedia:
+                if self._loop_current and not self._paused:
+                    self._player.setPosition(0)
+                    self._player.play()
+                    return
+                # Freeze on the last frame until the next step swaps in a new video.
+                self._ended = True
+                if self._player.duration() > 0:
+                    self._player.setPosition(max(0, self._player.duration() - 1))
+                self._player.pause()
 
 
     class ControlWindow(QtWidgets.QWidget):
@@ -1324,8 +1345,12 @@ def main():
         left.addWidget(avatar_panel, stretch=1)
     
     # Right: video panel
-    video_panel = InstructionVideoPlayer(VIDEO_PATH)
+    video_panel = InstructionVideoPlayer(VIDEO_FOLDER)
     right.addWidget(video_panel, stretch=1)
+
+    music_controls = QtWidgets.QVBoxLayout()
+    music_controls.setSpacing(10)
+    right.addLayout(music_controls)
 
     # Center: status, sequence, score, bars, buttons
     if args.mode == "simulate":
@@ -1427,18 +1452,34 @@ def main():
     control_row = QtWidgets.QHBoxLayout()
     control_row.setSpacing(8)
 
-    start_btn = QtWidgets.QPushButton("Start")
-    pause_btn = QtWidgets.QPushButton("Pause")
-    play_btn = QtWidgets.QPushButton("Play")
-    skip_btn = QtWidgets.QPushButton("Skip")
+    start_btn = QtWidgets.QPushButton("Spiel Starten")
+    pause_btn = QtWidgets.QPushButton("Musik Pausieren")
+    play_btn = QtWidgets.QPushButton("Musik Abspielen")
+    skip_btn = QtWidgets.QPushButton("Schritt Überspringen")
 
-    for button in (start_btn, pause_btn, play_btn, skip_btn):
-        button.setStyleSheet(
-            "QPushButton{color:#cfd3d8; background:#1c1f26; border:none;"
-            "padding:9px; border-radius:8px; font-size:13px;}"
-            "QPushButton:hover{background:#262a33;}")
-        control_row.addWidget(button)
+    primary_button_style = (
+        "QPushButton{color:#f4f6f8; background:#2c7a4b; border:none;"
+        "padding:14px 18px; border-radius:10px; font-size:18px; font-weight:700;}"
+        "QPushButton:hover{background:#35955b;}"
+        "QPushButton:disabled{background:#3a3f46; color:#8a9098;}"
+    )
+    secondary_button_style = (
+        "QPushButton{color:#cfd3d8; background:#1c1f26; border:none;"
+        "padding:12px 16px; border-radius:10px; font-size:16px; font-weight:600;}"
+        "QPushButton:hover{background:#262a33;}"
+        "QPushButton:disabled{background:#17191f; color:#6d737c;}"
+    )
+
+    start_btn.setStyleSheet(primary_button_style)
+    skip_btn.setStyleSheet(primary_button_style)
+    pause_btn.setStyleSheet(secondary_button_style)
+    play_btn.setStyleSheet(secondary_button_style)
+    control_row.addWidget(start_btn)
+    control_row.addWidget(skip_btn)
     center.addLayout(control_row)
+
+    music_controls.addWidget(pause_btn)
+    music_controls.addWidget(play_btn)
 
     log_label = QtWidgets.QLabel("Bereit zum Start")
     log_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
@@ -1484,20 +1525,18 @@ def main():
         if not session_started[0] or media_paused[0]:
             return
         media_paused[0] = True
-        video_panel.pause()
         if music_player is not None:
             music_player.pause()
-        log_label.setText("Medien pausiert")
+        log_label.setText("Musik pausiert")
         log_label.setStyleSheet("color:#f39c12; font-size:12px;")
 
     def play_media():
         if not session_started[0] or not media_paused[0]:
             return
         media_paused[0] = False
-        video_panel.play()
         if music_player is not None:
             music_player.play()
-        log_label.setText("Aufzeichnung läuft…")
+        log_label.setText("Musik läuft…")
         log_label.setStyleSheet("color:#e74c3c; font-size:12px;")
 
     def skip_step():
@@ -1541,7 +1580,8 @@ def main():
         if avatar_panel is not None:
             avatar_panel.update_from_state(label, feats)
         
-        video_panel.set_segment(game["step_name"], game.get("video_segment"))
+        video_panel.set_video(game["step_name"], game.get("video_segment"),
+                      game.get("step_kind"))
         score_label.setText(
             "Punkte: %d   Runden: %d" % (game["score"], game["rounds_completed"]))
         seq_label.setText(render_routine_html(game))

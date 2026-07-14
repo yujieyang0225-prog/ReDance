@@ -138,8 +138,7 @@ def _seq_group_released(labels, features):
             return False
     return True
 
-
-TIPTOES = ((LIFT_L,), (LIFT_R,),) * 3
+video_folder = "easy_videos/"
 
 # simple German names for the movements, shown to the patient
 LABEL_TEXT_DE = {
@@ -152,14 +151,14 @@ LABEL_TEXT_DE = {
 }
 
 OPENING_PRELUDE = [
-    _prep_hold("Nach vorne beugen", LEAN, 3.0, calibration="forward",
-               video=(40.0, 47.0)),
-    _prep_hold("Linkes Bein heben", LIFT_L, 3.0, calibration="lift_L",
-               video=(29.0, 30.0)),
-    _prep_hold("Rechtes Bein heben", LIFT_R, 3.0, calibration="lift_R",
-               video=(28.0, 29.0)),
-    _prep_hold("Nach links drehen", TURN_LEFT, 2.0, video=(53.0, 59.0)),
-    _prep_hold("Nach rechts drehen", TURN_RIGHT, 2.0, video=(53.0, 59.0)),
+    _prep_hold("Nach vorne beugen", LEAN, 1.0, calibration="forward",
+               video="lean.mp4"),
+    _prep_hold("Linkes Bein heben", LIFT_L, 1.0, calibration="lift_L",
+               video="tiptoe_left.mp4"),
+    _prep_hold("Rechtes Bein heben", LIFT_R, 1.0, calibration="lift_R",
+               video="tiptoe_right.mp4"),
+    _prep_hold("Nach links drehen", TURN_LEFT, 1.0, video="turn_left.mp4"),
+    _prep_hold("Nach rechts drehen", TURN_RIGHT, 1.0, video="turn_right.mp4"),
 ]
 
 # Each step carries its own instruction-video segment (start_s, stop_s), so
@@ -173,35 +172,40 @@ ROUTINE = [
     ("Kalibrierung", OPENING_PRELUDE[3]),
     ("Kalibrierung", OPENING_PRELUDE[4]),
     # ----- Warmup -----
-    ("Aufwärmen", _hold("Ruhig sitzen", NEUTRAL, 10.0, video=(0.0, 2.0))),
-    ("Aufwärmen", _timed("Füße kreisen", 20.0, video=(2.0, 17.0))),
-    ("Aufwärmen", _timed("Zur Seite greifen", 20.0, video=(17.0, 27.0))),
+    ("Aufwärmen", _timed("Rechtes Füße kreisen", 16.0, video="rotate_right.mp4")),
+    ("Aufwärmen", _timed("Linkes Füße kreisen", 16.0, video="rotate_left.mp4")),
     # ----- Dance (3 s calibration reward between sections) -----
-    ("Tanz", _seq("Zehenspitzen", TIPTOES, video=(27.0, 37.0))),
+    ("Tanz", _seq("Rechtes Bein heben", ((LIFT_R,),) * 3, video="tiptoe_right.mp4")),
     ("Tanz", _calib()),
-    ("Tanz", _seq("Rechtes Bein heben", ((LIFT_R,),) * 3, video=(28.0, 29.0))),
+    ("Tanz", _seq("Linkes Bein heben", ((LIFT_L,),) * 3, video="tiptoe_left.mp4")),
     ("Tanz", _calib()),
-    ("Tanz", _seq("Linkes Bein heben", ((LIFT_L,),) * 3, video=(29.0, 30.0))),
+    ("Tanz", _seq("Kleine Schritte", ((LIFT_L, LIFT_R,),) * 3, video="baby_walk.mp4")),
     ("Tanz", _calib()),
-    ("Tanz", _seq("Kleine Schritte", ((LIFT_L, LIFT_R,),) * 3, video=(37.0, 40.0))),
+    ("Tanz", _seq("Nach vorne beugen", ((LEAN,),) * 2, video="lean.mp4")),
     ("Tanz", _calib()),
-    ("Tanz", _seq("Nach vorne beugen", ((LEAN,),) * 2, video=(40.0, 47.0))),
+    ("Tanz", _seq("Nach vorne beugen rechts", ((LEAN, TURN_RIGHT,),), video="lean_right.mp4")),
     ("Tanz", _calib()),
-    ("Tanz", _seq("Nach vorne beugen", ((LEAN, TURN_LEFT,), (LEAN, TURN_RIGHT,),), video=(47.0, 53.0))),
+    ("Tanz", _seq("Nach vorne beugen links", ((LEAN, TURN_LEFT,),), video="lean_left.mp4")),
     ("Tanz", _calib()),
-    ("Tanz", _seq("Oberkörper drehen", ((TURN_LEFT,), (TURN_RIGHT,),),
-                   video=(53.0, 59.0))),
+    ("Tanz", _seq("Oberkörper drehen rechts", ((TURN_LEFT,), (TURN_RIGHT,),), video="turn_right.mp4")),
     ("Tanz", _calib()),
-    ("Tanz", _seq("Zehenspitzen", TIPTOES, video=(59.0, 67.0))),
+    ("Tanz", _seq("Oberkörper drehen links", ((TURN_LEFT,), (TURN_RIGHT,),), video="turn_left.mp4")),
     ("Tanz", _calib()),
-    ("Tanz", _seq("Nach vorne beugen", ((LEAN,),) * 2, video=(67.0, 74.0))),
+    ("Tanz", _seq("Rechtes Bein heben", ((LIFT_R,),) * 3, video="tiptoe_right.mp4")),
     ("Tanz", _calib()),
-    ("Tanz", _seq("Nach vorne beugen", ((LEAN, TURN_LEFT,), (LEAN, TURN_RIGHT,),), video=(74.0, 80.0))),
+    ("Tanz", _seq("Linkes Bein heben", ((LIFT_L,),) * 3, video="tiptoe_left.mp4")),
     ("Tanz", _calib()),
-    ("Tanz", _seq("Oberkörper drehen", ((TURN_LEFT,), (TURN_RIGHT,),),
-                   video=(80.0, 87.0))),
+    ("Tanz", _seq("Nach vorne beugen", ((LEAN,),) * 2, video="lean.mp4")),
     ("Tanz", _calib()),
-    ("Tanz", _seq("Kleine Schritte", ((LIFT_L, LIFT_R,),) * 3, video=(93.0, 100.0))),
+    ("Tanz", _seq("Nach vorne beugen rechts", ((LEAN, TURN_RIGHT,),), video="lean_right.mp4")),
+    ("Tanz", _calib()),
+    ("Tanz", _seq("Nach vorne beugen links", ((LEAN, TURN_LEFT,),), video="lean_left.mp4")),
+    ("Tanz", _calib()),
+    ("Tanz", _seq("Oberkörper drehen rechts", ((TURN_LEFT,), (TURN_RIGHT,),), video="turn_right.mp4")),
+    ("Tanz", _calib()),
+    ("Tanz", _seq("Oberkörper drehen links", ((TURN_LEFT,), (TURN_RIGHT,),), video="turn_left.mp4")),
+    ("Tanz", _calib()),
+    ("Tanz", _seq("Kleine Schritte", ((LIFT_L, LIFT_R,),) * 3, video="baby_walk.mp4")),
 ]
 
 
