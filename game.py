@@ -383,14 +383,7 @@ class RoutineGame:
             progress = min(1.0, elapsed / step["seconds"])
         else:
             total = len(step["labels"])
-            nxt = step["labels"][self._count] if self._count < total else ()
-            if isinstance(nxt, tuple):
-                nxt_text = " + ".join(LABEL_TEXT_DE.get(label, label)
-                                       for label in nxt)
-            else:
-                nxt_text = LABEL_TEXT_DE.get(nxt, nxt)
-            detail = "%d / %d  ·  jetzt: %s" % (
-                self._count, total, nxt_text)
+            detail = "%d / %d" % (self._count, total)
             progress = self._count / float(total)
         if self._i + 1 < len(self.routine):
             next_name = self.routine[self._i + 1][1]["name"]

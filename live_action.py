@@ -221,17 +221,14 @@ def apply_opening_calibration(calibration, step_meta, samples):
 
 
 def render_routine_html(game):
-    # Current phase + step with live progress, and a peek at the next step.
-    # This is the window's PROMINENT display, so it gets the large type.
+    # Keep the main instruction short and prominent.
     return (
-        '<span style="color:#f1c40f; font-size:16px; font-weight:600;">%s</span>'
-        '<span style="color:#5a5f68; font-size:14px;">  ·  Schritt %d/%d</span>'
-        '<br><span style="color:#e5e7eb; font-size:40px; font-weight:800;">'
+        '<span style="color:#f1c40f; font-size:18px; font-weight:700;">Schritt %d/%d</span>'
+        '<br><span style="color:#e5e7eb; font-size:44px; font-weight:800;">'
         '%s</span><br>'
-        '<span style="color:#27ae60; font-size:24px; font-weight:700;">%s</span>'
-        '<br><span style="color:#5a5f68; font-size:14px;">danach: %s</span>'
-        % (game["phase"], game["step_index"], game["step_total"],
-           game["step_name"], game["step_detail"], game["next_name"]))
+        '<span style="color:#27ae60; font-size:28px; font-weight:700;">%s</span>'
+        % (game["step_index"], game["step_total"], game["step_name"],
+           game["step_detail"]))
 
 
 class SimulationClassifier(threading.Thread):
@@ -1218,7 +1215,7 @@ def main():
             self._player.mediaStatusChanged.connect(self._on_media_status_changed)
             self._ended = False
 
-            self._status.setText("Das Video folgt der aktuellen Übung.")
+            self._status.setText("")
 
         def _resolve_path(self, filename):
             if not filename:
@@ -1237,7 +1234,7 @@ def main():
                 self._status.setText("Videodatei nicht gefunden: " + str(filename))
                 return
             self._player.setSource(QUrl.fromLocalFile(path))
-            self._status.setText("Das Video folgt der aktuellen Übung.")
+            self._status.setText("")
 
         def set_video(self, name, filename, step_kind):
             key = (name, filename, step_kind)
@@ -1249,16 +1246,16 @@ def main():
                 if not self._player.source().isEmpty():
                     self._player.setPosition(0)
                 self._player.pause()
-                self._status.setText("Video pausiert: " + name)
+                self._status.setText("")
                 return
             if filename is None:
                 self._player.pause()
-                self._status.setText("Video pausiert: " + name)
+                self._status.setText("")
                 return
             self._load_video(filename)
             if self._player.source().isEmpty():
                 return
-            self._status.setText("Video läuft: " + name)
+            self._status.setText("")
             if not self._paused or self._ended:
                 self._player.setPosition(0)
                 self._player.play()
@@ -1359,7 +1356,7 @@ def main():
         _status0 = "Bitte Start drücken"
     status = QtWidgets.QLabel(_status0)
     status.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-    status.setStyleSheet("color:#9aa0a8; font-size:15px;")
+    status.setStyleSheet("color:#d8dde3; font-size:24px; font-weight:700;")
     center.addWidget(status)
 
     if args.mode == "simulate":
@@ -1367,6 +1364,7 @@ def main():
         hint.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         hint.setStyleSheet("color:#7f8791; font-size:12px;")
         hint.setWordWrap(True)
+        hint.hide()
         center.addWidget(hint)
     elif args.mode == "live":
         hint = QtWidgets.QLabel(
@@ -1375,6 +1373,7 @@ def main():
         hint.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         hint.setStyleSheet("color:#7f8791; font-size:12px;")
         hint.setWordWrap(True)
+        hint.hide()
         center.addWidget(hint)
 
     # The routine (expected sequence) and score are the PROMINENT display;
@@ -1382,14 +1381,14 @@ def main():
     seq_label = QtWidgets.QLabel()
     seq_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
     seq_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
-    seq_label.setStyleSheet("font-size:15px;")
+    seq_label.setStyleSheet("font-size:18px;")
     seq_label.setWordWrap(True)
     center.addWidget(seq_label, stretch=1)
 
-    score_label = QtWidgets.QLabel("Punkte: 0   Runden: 0")
+    score_label = QtWidgets.QLabel("0")
     score_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
     score_label.setStyleSheet(
-        "color:#e5e7eb; font-size:28px; font-weight:800;")
+        "color:#e5e7eb; font-size:54px; font-weight:800;")
     center.addWidget(score_label)
 
     bars = {}
@@ -1408,7 +1407,7 @@ def main():
             ("lift_R", "Bein rechts"), ("turn_L", "Drehen links"),
             ("turn_R", "Drehen rechts")]):
         lab = QtWidgets.QLabel(name)
-        lab.setStyleSheet("color:#cfd3d8; font-size:13px;")
+        lab.setStyleSheet("color:#e5e7eb; font-size:18px; font-weight:600;")
         bar = ThresholdBar(BAR_THRESHOLDS[key])
         bar.setRange(0, 100)
         bar.setTextVisible(False)
@@ -1425,6 +1424,7 @@ def main():
     big.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
     big.setStyleSheet("color:#8a8f98; font-size:18px; font-weight:600;")
     big.setWordWrap(True)
+    big.hide()
     center.addWidget(big)
 
     flash_label = QtWidgets.QLabel("")
@@ -1481,7 +1481,7 @@ def main():
     music_controls.addWidget(pause_btn)
     music_controls.addWidget(play_btn)
 
-    log_label = QtWidgets.QLabel("Bereit zum Start")
+    log_label = QtWidgets.QLabel("Bereit")
     log_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
     log_label.setStyleSheet("color:#7f8791; font-size:12px;")
     log_label.setWordWrap(True)
@@ -1494,7 +1494,7 @@ def main():
         reader.logger = None
         lg.close()
         session_logger[0] = None
-        log_label.setText("Gespeichert: " + lg.folder)
+        log_label.setText("Gespeichert")
         log_label.setStyleSheet("color:#27ae60; font-size:12px;")
 
     def ensure_logging_started():
@@ -1503,7 +1503,7 @@ def main():
         lg = SessionLogger()
         session_logger[0] = lg
         reader.logger = lg
-        log_label.setText("Aufzeichnung läuft…")
+        log_label.setText("Aufzeichnung läuft")
         log_label.setStyleSheet("color:#e74c3c; font-size:12px;")
 
     def start_session():
@@ -1527,8 +1527,6 @@ def main():
         media_paused[0] = True
         if music_player is not None:
             music_player.pause()
-        log_label.setText("Musik pausiert")
-        log_label.setStyleSheet("color:#f39c12; font-size:12px;")
 
     def play_media():
         if not session_started[0] or not media_paused[0]:
@@ -1536,8 +1534,6 @@ def main():
         media_paused[0] = False
         if music_player is not None:
             music_player.play()
-        log_label.setText("Musik läuft…")
-        log_label.setStyleSheet("color:#e74c3c; font-size:12px;")
 
     def skip_step():
         if not session_started[0]:
@@ -1566,12 +1562,11 @@ def main():
             if music_player is not None:
                 music_player.pause()
             video_panel.pause()
-            status.setText("Start drücken: Session beginnt dann automatisch")
+            status.setText("Spiel Starten")
             big.setText("—")
             big.setStyleSheet("color:#8a8f98; font-size:18px; font-weight:600;")
             seq_label.setText(render_routine_html(game))
-            score_label.setText(
-                "Punkte: %d   Runden: %d" % (game["score"], game["rounds_completed"]))
+            score_label.setText(str(game["score"]))
             for b in bars.values():
                 b.setValue(0)
             return
@@ -1582,8 +1577,7 @@ def main():
         
         video_panel.set_video(game["step_name"], game.get("video_segment"),
                       game.get("step_kind"))
-        score_label.setText(
-            "Punkte: %d   Runden: %d" % (game["score"], game["rounds_completed"]))
+        score_label.setText(str(game["score"]))
         seq_label.setText(render_routine_html(game))
         # highlight every bar that belongs to the currently expected rep
         # and fade the unrelated bars so the patient focuses on the target.
@@ -1636,9 +1630,9 @@ def main():
             flash_label.setText("")
         if state == "idle":
             if args.mode == "simulate":
-                status.setText("Simulation: bereit")
+                status.setText("Bereit")
             else:
-                status.setText("Bereit zum Start")
+                status.setText("Bereit")
             big.setText("—")
             big.setStyleSheet(
                 "color:#8a8f98; font-size:18px; font-weight:600;")
@@ -1646,12 +1640,10 @@ def main():
                 b.setValue(0)
             return
         if state == "calibrating":
-            remaining = max(0.0, CALIB_SECONDS * (1.0 - progress))
             if args.mode == "simulate":
-                status.setText("Simulation: bitte warten… %.1f s" % remaining)
+                status.setText("")
             else:
-                status.setText(
-                    "Bitte ruhig sitzen — Kalibrierung läuft… %.1f s" % remaining)
+                status.setText("")
             big.setText("—")
             big.setStyleSheet(
                 "color:#8a8f98; font-size:18px; font-weight:600;")
@@ -1659,9 +1651,9 @@ def main():
                 b.setValue(0)
             return
         if args.mode == "simulate":
-            status.setText("Simulation: Bewegung erkannt")
+            status.setText("")
         else:
-            status.setText("Ihre Bewegung wird erkannt")
+            status.setText("")
         text, color = DISPLAY.get(label, (label, "#cfd3d8"))
         big.setText(text)
         big.setStyleSheet("color:%s; font-size:18px; font-weight:600;" % color)
