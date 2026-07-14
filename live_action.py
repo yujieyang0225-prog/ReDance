@@ -65,18 +65,31 @@ DISPLAY = {
 
 # Spoken reward audio files, generated on first run when missing.
 SOUND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sounds")
-EVENT_SOUNDS = {
-    "correct": ("super.wav", "Super!"),
-    "calib_reward": ("perfekt.wav", "Perfekt!"),
-    "step_complete": ("perfekt.wav", "Perfekt!"),
-    "routine_complete": ("geschafft.wav", "Geschafft!"),
+SPOKEN_AUDIO = {
+    "event_correct": ("super.wav", "Super!"),
+    # "event_calib_reward": ("perfekt.wav", "Perfekt!"),
+    "event_step_complete": ("perfekt.wav", "Perfekt!"),
+    "event_routine_complete": ("geschafft.wav", "Geschafft!"),
+    "reps_left_3": ("noch_dreimal.wav", "Noch dreimal!"),
+    "reps_left_2": ("noch_zweimal.wav", "Noch zweimal!"),
+    "reps_left_1": ("noch_einmal.wav", "Noch einmal!"),
+    "next_reps_3": ("wir_machen_dreimal.wav", "Wir machen es dreimal!"),
+    "next_reps_2": ("wir_machen_zweimal.wav", "Wir machen es zweimal!"),
+    "next_reps_1": ("wir_machen_einmal.wav", "Wir machen es einmal!"),
+}
+
+EVENT_SPEECH_KEYS = {
+    "correct": "event_correct",
+    # "calib_reward": "event_calib_reward",
+    "step_complete": "event_step_complete",
+    "routine_complete": "event_routine_complete",
 }
 
 
 def ensure_event_sounds():
     os.makedirs(SOUND_DIR, exist_ok=True)
     created = set()
-    for fname, spoken_text in EVENT_SOUNDS.values():
+    for fname, spoken_text in SPOKEN_AUDIO.values():
         if fname in created:
             continue
         created.add(fname)
@@ -1064,14 +1077,66 @@ def main():
 
     # achievement sounds (synthesized on first run); disabled on any failure
     sound_effects = {}
+    speech_queue = []
+    speech_current = [None]
+
+    def _is_event_speech_key(key):
+        return isinstance(key, str) and key.startswith("event_")
+
+    def _play_speech_key(key):
+        eff = sound_effects.get(key)
+        if eff is None:
+            return False
+        speech_current[0] = key
+        eff.stop()
+        eff.play()
+        return True
+
+    def _drain_speech_queue():
+        if speech_current[0] is not None:
+            return
+        while speech_queue:
+            queued_key = speech_queue.pop(0)
+            if _play_speech_key(queued_key):
+                return
+
+    def enqueue_speech(key):
+        if key is None or key not in sound_effects:
+            return
+        if key == speech_current[0]:
+            return
+        if key in speech_queue:
+            return
+        if speech_current[0] is None and not speech_queue:
+            _play_speech_key(key)
+            return
+        if _is_event_speech_key(key):
+            insert_at = 0
+            while (insert_at < len(speech_queue)
+                   and _is_event_speech_key(speech_queue[insert_at])):
+                insert_at += 1
+            speech_queue.insert(insert_at, key)
+            return
+        speech_queue.append(key)
+
     try:
         from PyQt6.QtMultimedia import QSoundEffect
         ensure_event_sounds()
-        for ev_name, (fname, _notes) in EVENT_SOUNDS.items():
+        for ev_name, (fname, _spoken_text) in SPOKEN_AUDIO.items():
             eff = QSoundEffect()
             eff.setSource(QUrl.fromLocalFile(os.path.join(SOUND_DIR, fname)))
             eff.setVolume(0.6)
             sound_effects[ev_name] = eff
+
+        for key, eff in sound_effects.items():
+            def _on_playing_changed(speech_key=key, effect=eff):
+                if effect.isPlaying():
+                    return
+                if speech_current[0] == speech_key:
+                    speech_current[0] = None
+                    _drain_speech_queue()
+
+            eff.playingChanged.connect(_on_playing_changed)
     except Exception:
         sound_effects = {}
 
@@ -1642,12 +1707,25 @@ def main():
             b.set_active(bar_key in active_bars,
                          active_bars.get(bar_key))
         if event is not None and event_ts > handled_event_ts[0]:
-            # play spoken feedback ONCE per event
+            # Queue spoken feedback so clips never overlap.
             handled_event_ts[0] = event_ts
             event_name = event.get("event")
-            eff = sound_effects.get(event_name)
-            if eff is not None:
-                eff.play()
+            speech_keys = []
+            primary_key = EVENT_SPEECH_KEYS.get(event_name)
+            if primary_key is not None:
+                speech_keys.append(primary_key)
+            if event_name == "correct":
+                seq_remaining = game.get("seq_remaining")
+                if seq_remaining in (1, 2, 3):
+                    speech_keys.append("reps_left_%d" % seq_remaining)
+            if event_name in ("step_complete", "calib_step_complete",
+                              "calib_reward", "step_skipped",
+                              "calib_step_skipped") and game.get("step_kind") == "calib":
+                next_seq_reps = game.get("next_seq_reps")
+                if next_seq_reps in (1, 2, 3):
+                    speech_keys.append("next_reps_%d" % next_seq_reps)
+            for speech_key in speech_keys:
+                enqueue_speech(speech_key)
             if session_logger[0] is not None:
                 session_logger[0].log_event(event_name, game,
                                             event.get("points", 0))

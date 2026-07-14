@@ -373,6 +373,8 @@ class RoutineGame:
         step = self._step
         kind = step["kind"]
         now = time.time()
+        seq_total = None
+        seq_remaining = None
         if kind == "hold":
             elapsed = 0.0 if self._hold_start is None else now - self._hold_start
             detail = "halten:  %.0f / %.0f s" % (min(elapsed, step["seconds"]),
@@ -383,13 +385,19 @@ class RoutineGame:
             detail = "noch %.0f s" % max(0.0, step["seconds"] - elapsed)
             progress = min(1.0, elapsed / step["seconds"])
         else:
-            total = len(step["labels"])
-            detail = "%d / %d" % (self._count, total)
-            progress = self._count / float(total)
+            seq_total = len(step["labels"])
+            seq_remaining = max(0, seq_total - self._count)
+            detail = "%d / %d" % (self._count, seq_total)
+            progress = self._count / float(seq_total)
         if self._i + 1 < len(self.routine):
             next_name = self.routine[self._i + 1][1]["name"]
         else:
             next_name = "geschafft!"
+        next_seq_reps = None
+        for _phase, next_step in self.routine[self._i + 1:]:
+            if next_step["kind"] == "seq":
+                next_seq_reps = len(next_step["labels"])
+                break
         if kind == "seq" and self._count < len(step["labels"]):
             expected_labels = step["labels"][self._count]
             expected_label = expected_labels[0] if len(expected_labels) == 1 else expected_labels
@@ -410,6 +418,9 @@ class RoutineGame:
             "step_kind": kind,
             "step_detail": detail,
             "step_progress": progress,
+            "seq_total": seq_total,
+            "seq_remaining": seq_remaining,
+            "next_seq_reps": next_seq_reps,
             "next_name": next_name,
             "expected": step["name"],
             "score": self.score,
