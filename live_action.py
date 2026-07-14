@@ -16,6 +16,7 @@ except ImportError:
 
 from mapping import (
     CHANNELS, REQUIRED_CHANNELS, parse_line, calibrate_neutral,
+    calibrate_forward, calibrate_lift_left, calibrate_lift_right,
     MovementMapper,
 )
 from classify import (
@@ -68,6 +69,9 @@ EVENT_DISPLAY = {
     "calib_reward": ("Kalibriert!  +%d" % POINTS_CALIB, "#3b9ea5"),
     "step_complete": ("★ Übung geschafft!  +%d ★" % POINTS_STEP_COMPLETE,
                       "#27ae60"),
+    "step_skipped": ("Übung übersprungen", "#e67e22"),
+    "calib_step_complete": ("Kalibrierung geschafft", "#3b9ea5"),
+    "calib_step_skipped": ("Kalibrierung übersprungen", "#e67e22"),
     "routine_complete": ("Glückwunsch — alles geschafft!  +%d Bonus"
                          % BONUS_ON_COMPLETE, "#f1c40f"),
 }
@@ -157,8 +161,8 @@ class SessionLogger:
         self._ef = open(os.path.join(self.folder, "events.csv"),
                         "w", newline="")
         self._ew = csv.writer(self._ef)
-        self._ew.writerow(["t_s", "event", "phase", "step_index",
-                           "step_name", "score", "rounds"])
+        self._ew.writerow(["t_s", "event", "points", "phase", "step_index",
+                   "step_name", "score", "rounds"])
         self._n = 0
         self.active = True
 
@@ -179,14 +183,14 @@ class SessionLogger:
             if self._n % LOG_FLUSH_EVERY == 0:
                 self._sf.flush()
 
-    def log_event(self, event, game):
+    def log_event(self, event, game, points=0):
         if not self.active:
             return
         with self._lock:
             if not self.active:
                 return
             self._ew.writerow([round(time.perf_counter() - self._t0, 4),
-                               event, game["phase"], game["step_index"],
+                               event, points, game["phase"], game["step_index"],
                                game["step_name"], game["score"],
                                game["rounds_completed"]])
             self._ef.flush()
@@ -200,6 +204,20 @@ class SessionLogger:
             self._sf.close()
             self._ef.flush()
             self._ef.close()
+
+def apply_opening_calibration(calibration, step_meta, samples):
+    if calibration is None or not step_meta:
+        return calibration
+    if not samples:
+        return calibration
+    target = step_meta.get("calibration")
+    if target == "forward":
+        return calibrate_forward(calibration, samples)
+    if target == "lift_L":
+        return calibrate_lift_left(calibration, samples)
+    if target == "lift_R":
+        return calibrate_lift_right(calibration, samples)
+    return calibration
 
 
 def render_routine_html(game):
@@ -222,7 +240,7 @@ class SimulationClassifier(threading.Thread):
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
 
-        self.state = "calibrating"       # "calibrating" | "running"
+        self.state = "idle"             # "idle" | "calibrating" | "running"
         self.progress = 0.0
         self.label = NEUTRAL
         self.features = {"lean": 0.0, "lift_L": 0.0,
@@ -232,14 +250,36 @@ class SimulationClassifier(threading.Thread):
         self.game = RoutineGame()
         self.game_event = None
         self.game_event_ts = 0.0
+        self._calibration = None
 
-        self._calib_start = time.perf_counter()
+        self._calib_start = None
         self._last_write = 0.0
         self._last_step_kind = None
+        self._opening_samples = []
+        self._neutral_samples = []
         self.logger = None            # SessionLogger, set by the GUI
 
     def open(self):
         return None
+
+    def _reset_session_locked(self):
+        self.state = "calibrating"
+        self.progress = 0.0
+        self.label = NEUTRAL
+        self.features = {"lean": 0.0, "lift_L": 0.0,
+                         "lift_R": 0.0, "turn": 0.0}
+        self.game = RoutineGame()
+        self.game_event = None
+        self.game_event_ts = 0.0
+        self._calib_start = time.perf_counter()
+        self._last_step_kind = None
+        self._opening_samples = []
+        self._neutral_samples = []
+        self._calibration = None
+
+    def start_session(self):
+        with self._lock:
+            self._reset_session_locked()
 
     def recalibrate(self):
         with self._lock:
@@ -250,6 +290,18 @@ class SimulationClassifier(threading.Thread):
                              "lift_R": 0.0, "turn": 0.0}
             self._calib_start = time.perf_counter()
             self.game.reset_edge()
+            self._opening_samples = []
+            self._neutral_samples = []
+            self._neutral_samples = []
+
+    def skip_current_step(self):
+        with self._lock:
+            event = self.game.skip_current()
+            if event is not None:
+                self.game_event = event
+                self.game_event_ts = time.time()
+            self._opening_samples = []
+            return event
 
     def handle_key(self, key):
         key = key.lower()
@@ -282,22 +334,73 @@ class SimulationClassifier(threading.Thread):
             return {"lean": 0.0, "lift_L": 0.0, "lift_R": 0.0, "turn": 1.0}
         return {"lean": 0.0, "lift_L": 0.0, "lift_R": 0.0, "turn": 0.0}
 
+    def _synthetic_raw_sample(self):
+        sample = {k: 0.0 for k in CHANNELS}
+        sample["ax0"] = 1.0
+        sample["ax1"] = 1.0
+        sample["az3"] = 1.0
+        sample["az4"] = 1.0
+        if self.label == LEAN:
+            sample["ax0"] = 0.65
+            sample["az0"] = 0.76
+        elif self.label == LIFT_L:
+            sample["az3"] = 0.72
+            sample["ay3"] = 0.69
+        elif self.label == LIFT_R:
+            sample["az4"] = 0.72
+            sample["ay4"] = 0.69
+        elif self.label == TURN_LEFT:
+            sample["gz1"] = -18.0
+        elif self.label == TURN_RIGHT:
+            sample["gz1"] = 18.0
+        return sample
+
+    def _calibration_sample(self):
+        return self._synthetic_raw_sample()
+
+    def _apply_initial_calibration(self):
+        previous = self._calibration
+        cal = calibrate_neutral(self._neutral_samples)
+        if previous is not None:
+            cal.fwd_lumbar = previous.fwd_lumbar
+            cal.fwd_thighL = previous.fwd_thighL
+            cal.fwd_thighR = previous.fwd_thighR
+        self._calibration = cal
+
+    def _apply_opening_step_calibration(self, step_meta):
+        self._calibration = apply_opening_calibration(
+            self._calibration, step_meta, self._opening_samples)
+        self._opening_samples = []
+
     def run(self):
         while not self._stop_event.is_set():
             now = time.perf_counter()
             recalib_now = False
+            initial_done = False
             with self._lock:
-                if self.state == "calibrating":
+                if self.state == "idle":
+                    pass
+                elif self.state == "calibrating":
+                    if self._calib_start is None:
+                        self._calib_start = now
+                    self._neutral_samples.append(self._calibration_sample())
                     elapsed = now - self._calib_start
                     self.progress = min(1.0, elapsed / CALIB_SECONDS)
                     if elapsed >= CALIB_SECONDS:
                         self.state = "running"
                         self.progress = 1.0
+                        initial_done = True
                 else:
+                    step = self.game.current_step()
+                    if step.get("kind") == "prep":
+                        self._opening_samples.append(self._calibration_sample())
                     event = self.game.update(self.label, self.features)
                     if event is not None:
                         self.game_event = event
                         self.game_event_ts = time.time()
+                        if (event.get("event") == "calib_step_complete"
+                                and event.get("step_kind") == "prep"):
+                            self._apply_opening_step_calibration(event["step"])
                     kind = self.game.current_kind()
                     recalib_now = (kind == "calib"
                                    and self._last_step_kind != "calib")
@@ -306,6 +409,9 @@ class SimulationClassifier(threading.Thread):
                     if lg is not None:
                         lg.log_sample(None, self.features, self.label,
                                       self.game.snapshot())
+            if initial_done:
+                with self._lock:
+                    self._apply_initial_calibration()
             if recalib_now:
                 self.recalibrate()   # takes the lock itself
             self._write_state()
@@ -367,7 +473,7 @@ class MujocoMotionClassifier(threading.Thread):
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
 
-        self.state = "calibrating"       # "calibrating" | "running"
+        self.state = "idle"             # "idle" | "calibrating" | "running"
         self.progress = 0.0
         self.label = NEUTRAL
         self.features = {"lean": 0.0, "lift_L": 0.0,
@@ -390,6 +496,32 @@ class MujocoMotionClassifier(threading.Thread):
 
     def open(self):
         return None
+
+    def start_session(self):
+        with self._lock:
+            self.state = "calibrating"
+            self.progress = 0.0
+            self.label = NEUTRAL
+            self.features = {"lean": 0.0, "lift_L": 0.0,
+                             "lift_R": 0.0, "turn": 0.0}
+            self.error = None
+            self.game = RoutineGame()
+            self.game_event = None
+            self.game_event_ts = 0.0
+            self._classifier = ActionClassifier(_IdentityMapper())
+            self._baseline = None
+            self._calib_angles = []
+            self._calib_start = None
+            self._last_ts = 0.0
+            self._last_step_kind = None
+
+    def skip_current_step(self):
+        with self._lock:
+            event = self.game.skip_current()
+            if event is not None:
+                self.game_event = event
+                self.game_event_ts = time.time()
+            return event
 
     def recalibrate(self):
         with self._lock:
@@ -442,34 +574,44 @@ class MujocoMotionClassifier(threading.Thread):
                 self.waiting = angles is None and \
                     time.time() - self._last_ts > MOTION_STALE_SECONDS
 
-            if angles is not None:
+            if angles is None:
                 with self._lock:
-                    state = self.state
+                    if self.state == "idle":
+                        pass
+                time.sleep(0.02)
+                continue
 
-                if state == "calibrating":
-                    now = time.perf_counter()
-                    if self._calib_start is None:
-                        self._calib_start = now
-                    self._calib_angles.append(angles)
-                    elapsed = now - self._calib_start
-                    done = elapsed >= CALIB_SECONDS and len(self._calib_angles) >= 20
+            with self._lock:
+                state = self.state
+
+            if state == "idle":
+                time.sleep(0.02)
+                continue
+
+            if state == "calibrating":
+                now = time.perf_counter()
+                if self._calib_start is None:
+                    self._calib_start = now
+                self._calib_angles.append(angles)
+                elapsed = now - self._calib_start
+                done = elapsed >= CALIB_SECONDS and len(self._calib_angles) >= 20
+                with self._lock:
+                    self.progress = min(1.0, elapsed / CALIB_SECONDS)
+                if done:
+                    n = len(self._calib_angles)
+                    baseline = {
+                        k: sum(a[k] for a in self._calib_angles) / n
+                        for k in self._calib_angles[0]
+                    }
                     with self._lock:
-                        self.progress = min(1.0, elapsed / CALIB_SECONDS)
-                    if done:
-                        n = len(self._calib_angles)
-                        baseline = {
-                            k: sum(a[k] for a in self._calib_angles) / n
-                            for k in self._calib_angles[0]
-                        }
-                        with self._lock:
-                            self._baseline = baseline
-                            self.state = "running"
-                else:
-                    out = self._classifier.update(
-                        self._features_from_angles(angles))
-                    with self._lock:
-                        self.label = out["label"]
-                        self.features = dict(out["features"])
+                        self._baseline = baseline
+                        self.state = "running"
+            else:
+                out = self._classifier.update(
+                    self._features_from_angles(angles))
+                with self._lock:
+                    self.label = out["label"]
+                    self.features = dict(out["features"])
 
             # feed the game every cycle (not only on fresh frames) so
             # hold/timed routine steps keep progressing while still
@@ -540,7 +682,7 @@ class LiveClassifier(threading.Thread):
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
 
-        self.state = "calibrating"       # "calibrating" | "running"
+        self.state = "idle"             # "idle" | "calibrating" | "running"
         self.progress = 0.0
         self.label = NEUTRAL
         self.features = {"lean": 0.0, "lift_L": 0.0,
@@ -552,10 +694,12 @@ class LiveClassifier(threading.Thread):
         self.game_event_ts = 0.0
 
         self._neutral = []
+        self._calibration = None
         self._calib_start = None
         self._classifier = None
         self._last_write = 0.0
         self._last_step_kind = None
+        self._opening_samples = []
         self.logger = None            # SessionLogger, set by the GUI
 
     def open(self):
@@ -564,6 +708,31 @@ class LiveClassifier(threading.Thread):
         self.ser = serial.Serial(self.port, self.baud, timeout=1)
         time.sleep(2.0)
         self.ser.reset_input_buffer()
+
+    def _reset_session_locked(self):
+        self.state = "calibrating"
+        self.progress = 0.0
+        self.label = NEUTRAL
+        self.features = {"lean": 0.0, "lift_L": 0.0,
+                         "lift_R": 0.0, "turn": 0.0}
+        self.game = RoutineGame()
+        self.game_event = None
+        self.game_event_ts = 0.0
+        self._neutral = []
+        self._calibration = None
+        self._calib_start = time.perf_counter()
+        self._classifier = None
+        self._last_step_kind = None
+        self._opening_samples = []
+
+    def start_session(self):
+        with self._lock:
+            self._reset_session_locked()
+            if self.ser is not None:
+                try:
+                    self.ser.reset_input_buffer()
+                except Exception:
+                    pass
 
     def recalibrate(self):
         with self._lock:
@@ -574,6 +743,62 @@ class LiveClassifier(threading.Thread):
             self._calib_start = None
             self._classifier = None
             self.game.reset_edge()
+            self._opening_samples = []
+
+    def skip_current_step(self):
+        with self._lock:
+            event = self.game.skip_current()
+            if event is not None:
+                self.game_event = event
+                self.game_event_ts = time.time()
+            self._opening_samples = []
+            return event
+
+    def _read_motion(self):
+        try:
+            with open(MOTION_FILE) as f:
+                payload = json.load(f)
+        except (OSError, ValueError):
+            return None
+        angles = payload.get("angles")
+        ts = payload.get("ts", 0.0)
+        if angles is None or time.time() - ts > MOTION_STALE_SECONDS:
+            return None
+        if ts <= self._last_ts:
+            return None                  # same frame as last time
+        self._last_ts = ts
+        return angles
+
+    def _features_from_angles(self, angles):
+        b = self._baseline
+        lean = (angles["torso_bend"] - b["torso_bend"]) / LEAN_MAX_DEG
+        # The viewer lifts a leg by driving the hip joint negative.
+        lift_l = -(angles["left_hip"] - b["left_hip"]) / LIFT_MAX_DEG
+        lift_r = -(angles["right_hip"] - b["right_hip"]) / LIFT_MAX_DEG
+        # classify.py wants positive turn = RIGHT; the avatar's +z rotation
+        # turns it to ITS anatomical left, so negate.
+        turn = -(angles["torso_rotation"] - b["torso_rotation"]) / TURN_MAX_DEG
+        return {
+            "lean": min(1.0, max(0.0, lean)),
+            "lift_L": min(1.0, max(0.0, lift_l)),
+            "lift_R": min(1.0, max(0.0, lift_r)),
+            "turn": min(1.0, max(-1.0, turn)),
+        }
+
+    def _apply_initial_calibration(self):
+        previous = self._calibration
+        cal = calibrate_neutral(self._neutral)
+        if previous is not None:
+            cal.fwd_lumbar = previous.fwd_lumbar
+            cal.fwd_thighL = previous.fwd_thighL
+            cal.fwd_thighR = previous.fwd_thighR
+        self._calibration = cal
+        self._classifier = ActionClassifier(MovementMapper(cal))
+
+    def _apply_opening_step_calibration(self, step_meta):
+        self._calibration = apply_opening_calibration(
+            self._calibration, step_meta, self._opening_samples)
+        self._opening_samples = []
 
     def run(self):
         while not self._stop_event.is_set():
@@ -588,12 +813,16 @@ class LiveClassifier(threading.Thread):
             line = raw.decode("utf-8", errors="ignore").strip()
             if line == "":
                 continue
+            print(line)
             _, values, ok = parse_line(line)
             if not ok or not all(k in values for k in REQUIRED_CHANNELS):
                 continue
 
             with self._lock:
                 state = self.state
+
+            if state == "idle":
+                continue
 
             if state == "calibrating":
                 now = time.perf_counter()
@@ -605,12 +834,14 @@ class LiveClassifier(threading.Thread):
                 with self._lock:
                     self.progress = min(1.0, elapsed / CALIB_SECONDS)
                 if done:
-                    cal = calibrate_neutral(self._neutral)
-                    clf = ActionClassifier(MovementMapper(cal))
                     with self._lock:
-                        self._classifier = clf
+                        self._apply_initial_calibration()
                         self.state = "running"
             else:
+                with self._lock:
+                    step = self.game.current_step()
+                    if step.get("kind") == "prep":
+                        self._opening_samples.append(values)
                 out = self._classifier.update(values)
                 cs = out["features"]
                 recalib_now = False
@@ -624,8 +855,9 @@ class LiveClassifier(threading.Thread):
                     if event is not None:
                         self.game_event = event
                         self.game_event_ts = time.time()
-                    # entering a routine calibration break: run the REAL
-                    # automatic recalibration (fresh neutral baseline)
+                        if (event.get("event") == "calib_step_complete"
+                                and event.get("step_kind") == "prep"):
+                            self._apply_opening_step_calibration(event["step"])
                     kind = self.game.current_kind()
                     recalib_now = (kind == "calib"
                                    and self._last_step_kind != "calib")
@@ -838,7 +1070,6 @@ def main():
             music_player.setAudioOutput(music_audio)
             music_player.setSource(QUrl.fromLocalFile(MUSIC_PATH))
             music_player.setLoops(QMediaPlayer.Loops.Infinite)
-            music_player.play()
         except Exception:
             music_player = None
 
@@ -939,6 +1170,8 @@ def main():
             self._displayed_key = None
             self._segment_start_ms = 0
             self._segment_end_ms = 0
+            self._paused = True
+            self._seek_on_resume = False
 
             layout = QtWidgets.QVBoxLayout(self)
             layout.setContentsMargins(0, 0, 0, 0)
@@ -995,11 +1228,27 @@ def main():
                 self._status.setText("Video nicht verfügbar")
                 return
             self._status.setText("Video läuft: " + name)
-            self._player.setPosition(self._segment_start_ms)
+            if not self._paused:
+                self._player.setPosition(self._segment_start_ms)
+                self._player.play()
+            else:
+                self._seek_on_resume = True
+
+        def pause(self):
+            self._paused = True
+            self._player.pause()
+
+        def play(self):
+            self._paused = False
+            if self._player.source().isEmpty():
+                return
+            if self._seek_on_resume:
+                self._player.setPosition(self._segment_start_ms)
+                self._seek_on_resume = False
             self._player.play()
 
         def _on_media_status_changed(self, status):
-            if status == QMediaPlayer.MediaStatus.LoadedMedia:
+            if status == QMediaPlayer.MediaStatus.LoadedMedia and not self._paused:
                 self._player.setPosition(self._segment_start_ms)
                 self._player.play()
 
@@ -1062,9 +1311,9 @@ def main():
 
     # Center: status, sequence, score, bars, buttons
     if args.mode == "simulate":
-        _status0 = "Simulation: bitte warten\u2026"
+        _status0 = "Simulation: Start drücken"
     else:
-        _status0 = "Bitte still halten \u2014 Kalibrierung\u2026"
+        _status0 = "Bitte Start drücken"
     status = QtWidgets.QLabel(_status0)
     status.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
     status.setStyleSheet("color:#9aa0a8; font-size:15px;")
@@ -1149,17 +1398,28 @@ def main():
     btn.clicked.connect(reader.recalibrate)
     center.addWidget(btn)
 
-    # ---- session data logging (start button; auto-stop on completion) ----
+    # ---- session controls and auto-start recording ----
     session_logger = [None]
+    session_started = [False]
+    media_paused = [False]
 
-    log_btn = QtWidgets.QPushButton("● Aufzeichnung starten")
-    log_btn.setStyleSheet(
-        "QPushButton{color:#cfd3d8; background:#1c1f26; border:none;"
-        "padding:9px; border-radius:8px; font-size:13px;}"
-        "QPushButton:hover{background:#262a33;}")
-    center.addWidget(log_btn)
+    control_row = QtWidgets.QHBoxLayout()
+    control_row.setSpacing(8)
 
-    log_label = QtWidgets.QLabel("")
+    start_btn = QtWidgets.QPushButton("Start")
+    pause_btn = QtWidgets.QPushButton("Pause")
+    play_btn = QtWidgets.QPushButton("Play")
+    skip_btn = QtWidgets.QPushButton("Skip")
+
+    for button in (start_btn, pause_btn, play_btn, skip_btn):
+        button.setStyleSheet(
+            "QPushButton{color:#cfd3d8; background:#1c1f26; border:none;"
+            "padding:9px; border-radius:8px; font-size:13px;}"
+            "QPushButton:hover{background:#262a33;}")
+        control_row.addWidget(button)
+    center.addLayout(control_row)
+
+    log_label = QtWidgets.QLabel("Bereit zum Start")
     log_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
     log_label.setStyleSheet("color:#7f8791; font-size:12px;")
     log_label.setWordWrap(True)
@@ -1172,22 +1432,65 @@ def main():
         reader.logger = None
         lg.close()
         session_logger[0] = None
-        log_btn.setText("● Aufzeichnung starten")
         log_label.setText("Gespeichert: " + lg.folder)
         log_label.setStyleSheet("color:#27ae60; font-size:12px;")
 
-    def toggle_logging():
-        if session_logger[0] is None:
-            lg = SessionLogger()
-            session_logger[0] = lg
-            reader.logger = lg
-            log_btn.setText("■ Aufzeichnung stoppen")
-            log_label.setText("● Aufzeichnung läuft…")
-            log_label.setStyleSheet("color:#e74c3c; font-size:12px;")
-        else:
-            finish_logging()
+    def ensure_logging_started():
+        if session_logger[0] is not None:
+            return
+        lg = SessionLogger()
+        session_logger[0] = lg
+        reader.logger = lg
+        log_label.setText("Aufzeichnung läuft…")
+        log_label.setStyleSheet("color:#e74c3c; font-size:12px;")
 
-    log_btn.clicked.connect(toggle_logging)
+    def start_session():
+        if session_started[0]:
+            return
+        session_started[0] = True
+        ensure_logging_started()
+        reader.start_session()
+        if music_player is not None:
+            music_player.setPosition(0)
+            music_player.play()
+        video_panel.play()
+        start_btn.setEnabled(False)
+        pause_btn.setEnabled(True)
+        play_btn.setEnabled(True)
+        skip_btn.setEnabled(True)
+
+    def pause_media():
+        if not session_started[0] or media_paused[0]:
+            return
+        media_paused[0] = True
+        video_panel.pause()
+        if music_player is not None:
+            music_player.pause()
+        log_label.setText("Medien pausiert")
+        log_label.setStyleSheet("color:#f39c12; font-size:12px;")
+
+    def play_media():
+        if not session_started[0] or not media_paused[0]:
+            return
+        media_paused[0] = False
+        video_panel.play()
+        if music_player is not None:
+            music_player.play()
+        log_label.setText("Aufzeichnung läuft…")
+        log_label.setStyleSheet("color:#e74c3c; font-size:12px;")
+
+    def skip_step():
+        if not session_started[0]:
+            return
+        reader.skip_current_step()
+
+    start_btn.clicked.connect(start_session)
+    pause_btn.clicked.connect(pause_media)
+    play_btn.clicked.connect(play_media)
+    skip_btn.clicked.connect(skip_step)
+    pause_btn.setEnabled(False)
+    play_btn.setEnabled(False)
+    skip_btn.setEnabled(False)
 
     reward_flash = RewardFlash(win)
     handled_event_ts = [0.0]
@@ -1197,6 +1500,20 @@ def main():
         game, event, event_ts = reader.game_snapshot()
         if error is not None:
             status.setText("Sensor-Fehler: " + error)
+            return
+
+        if not session_started[0]:
+            if music_player is not None:
+                music_player.pause()
+            video_panel.pause()
+            status.setText("Start drücken: Session beginnt dann automatisch")
+            big.setText("—")
+            big.setStyleSheet("color:#8a8f98; font-size:18px; font-weight:600;")
+            seq_label.setText(render_routine_html(game))
+            score_label.setText(
+                "Punkte: %d   Runden: %d" % (game["score"], game["rounds_completed"]))
+            for b in bars.values():
+                b.setValue(0)
             return
         
         # Update avatar panel if present
@@ -1217,26 +1534,40 @@ def main():
         if event is not None and event_ts > handled_event_ts[0]:
             # fire achievement sound + floating animation ONCE per event
             handled_event_ts[0] = event_ts
-            eff = sound_effects.get(event)
+            event_name = event.get("event")
+            eff = sound_effects.get(event_name)
             if eff is not None:
                 eff.play()
-            text, color = EVENT_DISPLAY.get(event, (event, "#cfd3d8"))
+            text, color = EVENT_DISPLAY.get(event_name, (event_name, "#cfd3d8"))
             # entering a calibration break: stretch the reward animation
             # across the whole 3 s break so it never feels idle
             long_pop = game.get("step_kind") == "calib"
             reward_flash.pop(text, color, 3000 if long_pop else 1200)
             if session_logger[0] is not None:
-                session_logger[0].log_event(event, game)
-            if event == "routine_complete":
+                session_logger[0].log_event(event_name, game,
+                                            event.get("points", 0))
+            if event_name == "routine_complete":
                 # last task done: stop logging and save automatically
                 finish_logging()
         if event is not None and time.time() - event_ts < EVENT_FLASH_SECONDS:
-            text, color = EVENT_DISPLAY.get(event, (event, "#cfd3d8"))
+            event_name = event.get("event")
+            text, color = EVENT_DISPLAY.get(event_name, (event_name, "#cfd3d8"))
             flash_label.setText(text)
             flash_label.setStyleSheet(
                 "color:%s; font-size:13px; font-weight:600;" % color)
         else:
             flash_label.setText("")
+        if state == "idle":
+            if args.mode == "simulate":
+                status.setText("Simulation: bereit")
+            else:
+                status.setText("Bereit zum Start")
+            big.setText("—")
+            big.setStyleSheet(
+                "color:#8a8f98; font-size:18px; font-weight:600;")
+            for b in bars.values():
+                b.setValue(0)
+            return
         if state == "calibrating":
             remaining = max(0.0, CALIB_SECONDS * (1.0 - progress))
             if args.mode == "simulate":

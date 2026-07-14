@@ -40,17 +40,35 @@ SEQ_TURN_GATE = 0.35
 
 def _hold(name, label, seconds, video=None):
     return {"kind": "hold", "name": name, "label": label,
-            "seconds": seconds, "video": video}
+            "seconds": seconds, "video": video,
+            "complete_event": "step_complete",
+            "complete_points": POINTS_STEP_COMPLETE,
+            "skip_event": "step_skipped", "skip_points": 0}
+
+
+def _prep_hold(name, label, seconds, calibration=None, video=None):
+    return {"kind": "prep", "name": name, "label": label,
+            "seconds": seconds, "video": video,
+            "calibration": calibration,
+            "complete_event": "calib_step_complete",
+            "complete_points": 0,
+            "skip_event": "calib_step_skipped", "skip_points": 0}
 
 
 def _seq(name, labels, video=None):
     return {"kind": "seq", "name": name, "labels": tuple(labels),
-            "video": video}
+            "video": video,
+            "complete_event": "step_complete",
+            "complete_points": POINTS_STEP_COMPLETE,
+            "skip_event": "step_skipped", "skip_points": 0}
 
 
 def _timed(name, seconds, video=None):
     return {"kind": "timed", "name": name, "seconds": seconds,
-            "video": video}
+            "video": video,
+            "complete_event": "step_complete",
+            "complete_points": POINTS_STEP_COMPLETE,
+            "skip_event": "step_skipped", "skip_points": 0}
 
 
 def _calib():
@@ -93,10 +111,27 @@ LABEL_TEXT_DE = {
     TURN_RIGHT: "nach rechts drehen",
 }
 
+OPENING_PRELUDE = [
+    _prep_hold("Nach vorne beugen", LEAN, 3.0, calibration="forward",
+               video=(40.0, 47.0)),
+    _prep_hold("Linkes Bein heben", LIFT_L, 3.0, calibration="lift_L",
+               video=(29.0, 30.0)),
+    _prep_hold("Rechtes Bein heben", LIFT_R, 3.0, calibration="lift_R",
+               video=(28.0, 29.0)),
+    _prep_hold("Nach links drehen", TURN_LEFT, 2.0, video=(53.0, 59.0)),
+    _prep_hold("Nach rechts drehen", TURN_RIGHT, 2.0, video=(53.0, 59.0)),
+]
+
 # Each step carries its own instruction-video segment (start_s, stop_s), so
 # repeated step names (Tip Toes, Trunk Flex, ...) loop their OWN part of the
 # video. Timestamps from the choreography video cut list.
 ROUTINE = [
+    # ----- Opening calibration / walkthrough -----
+    ("Kalibrierung", OPENING_PRELUDE[0]),
+    ("Kalibrierung", OPENING_PRELUDE[1]),
+    ("Kalibrierung", OPENING_PRELUDE[2]),
+    ("Kalibrierung", OPENING_PRELUDE[3]),
+    ("Kalibrierung", OPENING_PRELUDE[4]),
     # ----- Warmup -----
     ("Aufwärmen", _hold("Ruhig sitzen", NEUTRAL, 10.0, video=(0.0, 2.0))),
     ("Aufwärmen", _timed("Füße kreisen", 20.0, video=(2.0, 17.0))),
@@ -133,6 +168,11 @@ ROUTINE = [
 class RoutineGame:
     def __init__(self, routine=ROUTINE):
         self.routine = routine
+        self.reset()
+
+    def reset(self, routine=None):
+        if routine is not None:
+            self.routine = routine
         self.score = 0
         self.rounds_completed = 0
         self._i = 0
@@ -141,6 +181,7 @@ class RoutineGame:
         self._timed_start = None
         self._prev_label = NEUTRAL
         self._seq_trigger_armed = True
+        self._last_event = None
 
     @property
     def _step(self):
@@ -157,6 +198,9 @@ class RoutineGame:
     def current_kind(self):
         return self._step["kind"]
 
+    def current_step(self):
+        return self._step
+
     def reset_edge(self):
         # Call after a recalibration so the next label isn't mistaken for
         # a same-position hold from before the classifier was reset.
@@ -164,8 +208,20 @@ class RoutineGame:
         self._hold_start = None
         self._seq_trigger_armed = True
 
-    def _advance(self):
-        self.score += POINTS_STEP_COMPLETE
+    def _finish_step(self, event_name, points):
+        step = self._step
+        phase = self._phase
+        step_index = self._i + 1
+        self.score += points
+        self._last_event = {
+            "event": event_name,
+            "points": points,
+            "phase": phase,
+            "step_index": step_index,
+            "step_name": step["name"],
+            "step_kind": step["kind"],
+            "step": step,
+        }
         self._i += 1
         self._count = 0
         self._hold_start = None
@@ -175,24 +231,45 @@ class RoutineGame:
             self.score += BONUS_ON_COMPLETE
             self.rounds_completed += 1
             self._i = 0
-            return "routine_complete"
+            self._last_event = {
+                "event": "routine_complete",
+                "points": BONUS_ON_COMPLETE,
+                "phase": phase,
+                "step_index": len(self.routine),
+                "step_name": step["name"],
+                "step_kind": step["kind"],
+                "step": step,
+            }
+            return self._last_event
         if self.routine[self._i][1]["kind"] == "calib":
             # start the break clock immediately: the classifier's automatic
             # recalibration (~2 s, during which the game gets no updates)
             # runs INSIDE the 3 s window instead of stretching it
             self._timed_start = time.time()
-        return "step_complete"
+        return self._last_event
+
+    def _advance(self):
+        return self._finish_step(
+            self._step.get("complete_event", "step_complete"),
+            self._step.get("complete_points", POINTS_STEP_COMPLETE))
+
+    def skip_current(self):
+        return self._finish_step(
+            self._step.get("skip_event", "step_skipped"),
+            self._step.get("skip_points", 0))
 
     def update(self, label, features=None):
         # Call every sample/frame with the current label. Returns an event
         # string or None:
-        #   "correct", "calib_reward", "step_complete", "routine_complete"
+        #   "correct", "calib_reward", "step_complete", "step_skipped",
+        #   "calib_step_complete", "calib_step_skipped",
+        #   "routine_complete"
         step = self._step
         kind = step["kind"]
         now = time.time()
         self._prev_label = label
 
-        if kind == "hold":
+        if kind in ("hold", "prep"):
             if label == step["label"]:
                 if self._hold_start is None:
                     self._hold_start = now
@@ -215,12 +292,7 @@ class RoutineGame:
             if now - self._timed_start >= step["seconds"]:
                 # reward instead of the regular step bonus; a calib break
                 # is never the final step, so no round handling needed
-                self.score += POINTS_CALIB
-                self._i += 1
-                self._count = 0
-                self._hold_start = None
-                self._timed_start = None
-                return "calib_reward"
+                return self._finish_step("calib_reward", POINTS_CALIB)
             return None
 
         if kind == "seq":
@@ -235,7 +307,16 @@ class RoutineGame:
                 self.score += POINTS_PER_REP
                 if self._count >= len(step["labels"]):
                     return self._advance()
-                return "correct"
+                self._last_event = {
+                    "event": "correct",
+                    "points": POINTS_PER_REP,
+                    "phase": self._phase,
+                    "step_index": self._i + 1,
+                    "step_name": step["name"],
+                    "step_kind": step["kind"],
+                    "step": step,
+                }
+                return self._last_event
             return None
 
         return None
@@ -249,7 +330,7 @@ class RoutineGame:
             detail = "halten:  %.0f / %.0f s" % (min(elapsed, step["seconds"]),
                                                  step["seconds"])
             progress = min(1.0, elapsed / step["seconds"])
-        elif kind in ("timed", "calib"):
+        elif kind in ("timed", "calib", "prep"):
             elapsed = 0.0 if self._timed_start is None else now - self._timed_start
             detail = "noch %.0f s" % max(0.0, step["seconds"] - elapsed)
             progress = min(1.0, elapsed / step["seconds"])
@@ -283,4 +364,5 @@ class RoutineGame:
             "expected": step["name"],
             "score": self.score,
             "rounds_completed": self.rounds_completed,
+            "last_event": self._last_event,
         }

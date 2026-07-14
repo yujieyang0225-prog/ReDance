@@ -23,7 +23,7 @@
 import json
 import math
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 
 # ---------------------------------------------------------------------------
 # Shared parse contract (identical to the acquisition side)
@@ -108,6 +108,10 @@ def _clamp(x, lo, hi):
     return x
 
 
+def _dot(a, b):
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
 def tilt_angle_deg(acc, base_unit):
     # Angle between the current gravity direction and the neutral one.
     # Mounting-agnostic: no per-axis bookkeeping, drift-free.
@@ -153,6 +157,14 @@ class Calibration:
     base_thighL: tuple = (0.0, 0.0, 1.0)
     base_thighR: tuple = (0.0, 0.0, 1.0)
 
+    # Reference "correct direction" delta vectors, detected during
+    # calibration from short guided samples (see calibrate_forward() /
+    # calibrate_lift()). Zero vector = not calibrated -> that movement
+    # falls back to old unsigned (magnitude-only) behavior.
+    fwd_lumbar: tuple = (0.0, 0.0, 0.0)
+    fwd_thighL: tuple = (0.0, 0.0, 0.0)
+    fwd_thighR: tuple = (0.0, 0.0, 0.0)
+
     # yaw gyro axis on the CERVICAL sensor: 0=gx, 1=gy, 2=gz (DETECTED)
     yaw_axis: int = 0
     yaw_sign: float = 1.0
@@ -177,14 +189,16 @@ class Calibration:
 
     def to_dict(self):
         d = asdict(self)
-        for k in ("base_lumbar", "base_cervical", "base_thighL", "base_thighR"):
+        for k in ("base_lumbar", "base_cervical", "base_thighL",
+                  "base_thighR", "fwd_lumbar", "fwd_thighL", "fwd_thighR"):
             d[k] = list(d[k])
         return d
 
     @classmethod
     def from_dict(cls, d):
         d = dict(d)
-        for k in ("base_lumbar", "base_cervical", "base_thighL", "base_thighR"):
+        for k in ("base_lumbar", "base_cervical", "base_thighL",
+                  "base_thighR", "fwd_lumbar", "fwd_thighL", "fwd_thighR"):
             if k in d:
                 d[k] = tuple(d[k])
         return cls(**d)
@@ -243,6 +257,48 @@ def calibrate_neutral(samples):
     return cal
 
 
+def _reference_direction(base, samples, imu):
+    # Shared helper: derive a unit "correct movement direction" vector from
+    # a short guided recording (patient performing the movement once right
+    # after neutral), relative to that sensor's calibrated neutral baseline.
+    # Mounting-agnostic -- same principle as calibrate_neutral's yaw
+    # detection, just applied per-movement instead of hardcoding an axis.
+    if not samples:
+        return (0.0, 0.0, 0.0)
+    g_ref = _unit(_median_vector(samples, imu))
+    delta = (g_ref[0] - base[0], g_ref[1] - base[1], g_ref[2] - base[2])
+    return _unit(delta)
+
+
+def calibrate_forward(cal, forward_samples):
+    # Call AFTER calibrate_neutral(). forward_samples: a short recording
+    # of the patient leaning forward once. Detects which physical direction
+    # "forward" is for THIS patient/session's lumbar sensor mounting, so
+    # lean can be signed (forward positive, backward clamped to 0).
+    fwd = _reference_direction(cal.base_lumbar, forward_samples, LUMBAR)
+    if _norm(fwd) > 0.0:
+        cal.fwd_lumbar = fwd
+    return cal
+
+
+def calibrate_lift_left(cal, lift_samples):
+    # Call AFTER calibrate_neutral(). lift_samples: a short recording of
+    # the patient lifting the LEFT leg once. Same idea as calibrate_forward,
+    # applied to the left thigh sensor.
+    fwd = _reference_direction(cal.base_thighL, lift_samples, THIGH_L)
+    if _norm(fwd) > 0.0:
+        cal.fwd_thighL = fwd
+    return cal
+
+
+def calibrate_lift_right(cal, lift_samples):
+    # Same as calibrate_lift_left, for the RIGHT thigh sensor.
+    fwd = _reference_direction(cal.base_thighR, lift_samples, THIGH_R)
+    if _norm(fwd) > 0.0:
+        cal.fwd_thighR = fwd
+    return cal
+
+
 # ---------------------------------------------------------------------------
 # Mapper: one sample -> control state (carries EMA + hysteresis state)
 # ---------------------------------------------------------------------------
@@ -274,6 +330,21 @@ class MovementMapper:
             return value > off
         return value > on
 
+    def _signed_tilt(self, sample, imu, base, fwd_ref):
+        # Shared signing logic for lean / lift_L / lift_R: measures the
+        # unsigned tilt angle, then -- if a reference "correct direction"
+        # was calibrated -- flips it negative when the movement went the
+        # WRONG way (e.g. leaning back instead of forward, leg going down
+        # instead of up). No calibrated reference -> unchanged old
+        # unsigned (magnitude-only) behavior.
+        tilt = tilt_angle_deg(accel_vector(sample, imu), base)
+        if _norm(fwd_ref) > 0.0:
+            au = _unit(accel_vector(sample, imu))
+            delta = (au[0] - base[0], au[1] - base[1], au[2] - base[2])
+            if _dot(delta, fwd_ref) < 0.0:
+                tilt = -tilt
+        return tilt
+
     def update(self, sample, dt=None):
         c = self.cal
 
@@ -285,12 +356,18 @@ class MovementMapper:
             dt = 0.0 if self._last_t is None else min(0.25, now - self._last_t)
             self._last_t = now
 
-        tilt_lumbar = tilt_angle_deg(
-            accel_vector(sample, LUMBAR), c.base_lumbar)
-        tilt_thighL = tilt_angle_deg(
-            accel_vector(sample, THIGH_L), c.base_thighL)
-        tilt_thighR = tilt_angle_deg(
-            accel_vector(sample, THIGH_R), c.base_thighR)
+        # Direction-aware lean/lift: if a reference direction was
+        # calibrated (calibrate_forward / calibrate_lift_left/right), the
+        # tilt is signed so the WRONG-direction movement goes negative --
+        # the existing clamp(0,1) below then floors it at 0 instead of
+        # misreading it as progress. Falls back to old unsigned magnitude
+        # if no reference was calibrated for that sensor.
+        tilt_lumbar = self._signed_tilt(
+            sample, LUMBAR, c.base_lumbar, c.fwd_lumbar)
+        tilt_thighL = self._signed_tilt(
+            sample, THIGH_L, c.base_thighL, c.fwd_thighL)
+        tilt_thighR = self._signed_tilt(
+            sample, THIGH_R, c.base_thighR, c.fwd_thighR)
 
         self._ema_lean = self._ema(self._ema_lean, tilt_lumbar)
         self._ema_liftL = self._ema(self._ema_liftL, tilt_thighL)
