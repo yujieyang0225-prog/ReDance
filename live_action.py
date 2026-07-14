@@ -1258,12 +1258,18 @@ def main():
             self._video_stack.setContentsMargins(0, 0, 0, 0)
 
             self._placeholder = QtWidgets.QLabel()
-            self._placeholder.setMinimumSize(420, 240)
+            self._placeholder.setMinimumSize(0, 0)
+            self._placeholder.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                                            QtWidgets.QSizePolicy.Policy.Expanding)
             self._placeholder.setStyleSheet("background:#000000;")
             self._placeholder.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
 
             self._video_widget = QVideoWidget()
-            self._video_widget.setMinimumSize(420, 240)
+            self._video_widget.setMinimumSize(0, 0)
+            self._video_widget.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                                             QtWidgets.QSizePolicy.Policy.Expanding)
+            self._video_widget.setAspectRatioMode(
+                QtCore.Qt.AspectRatioMode.KeepAspectRatioByExpanding)
             self._video_widget.setStyleSheet("background:#000000;")
             self._video_widget.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
 
@@ -1301,15 +1307,23 @@ def main():
             if pixmap.isNull():
                 self._placeholder.setText("")
                 return
+            target = self._placeholder.size()
+            if target.width() <= 0 or target.height() <= 0:
+                self._placeholder.setPixmap(pixmap)
+                return
             scaled = pixmap.scaled(
-                self._placeholder.size(),
-                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                target,
+                QtCore.Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                 QtCore.Qt.TransformationMode.SmoothTransformation,
             )
-            self._placeholder.setPixmap(scaled)
+            x = max(0, (scaled.width() - target.width()) // 2)
+            y = max(0, (scaled.height() - target.height()) // 2)
+            cropped = scaled.copy(x, y, target.width(), target.height())
+            self._placeholder.setPixmap(cropped)
 
         def _show_placeholder(self):
             self._video_stack.setCurrentWidget(self._placeholder)
+            self._update_placeholder_pixmap()
 
         def _show_video(self):
             self._video_stack.setCurrentWidget(self._video_widget)
