@@ -63,7 +63,7 @@ def _prep_hold(name, label, seconds, calibration=None, video=None):
 
 
 def _seq(name, labels, video=None):
-    return {"kind": "seq", "name": name, "labels": tuple(labels),
+    return {"kind": "seq", "name": name, "labels": _normalize_seq_labels(labels),
             "video": video,
             "complete_event": "step_complete",
             "complete_points": POINTS_STEP_COMPLETE,
@@ -88,6 +88,21 @@ def _calib():
             "seconds": CALIB_STEP_SECONDS, "video": None}
 
 
+def _normalize_seq_labels(labels):
+    labels = tuple(labels)
+    if not labels:
+        return tuple()
+    if isinstance(labels[0], str):
+        return (tuple(labels),)
+    normalized = []
+    for rep in labels:
+        if isinstance(rep, str):
+            normalized.append((rep,))
+        else:
+            normalized.append(tuple(rep))
+    return tuple(normalized)
+
+
 def _seq_signal_for_label(label, features):
     # Convert expected seq label to a scalar signal and its gate.
     # Extra simultaneous features are intentionally ignored.
@@ -106,7 +121,25 @@ def _seq_signal_for_label(label, features):
     return 0.0, 1.0
 
 
-TIPTOES = (LIFT_L, LIFT_R, LIFT_L, LIFT_R, LIFT_L, LIFT_R)
+def _seq_group_ready(labels, features):
+    labels = labels if isinstance(labels, tuple) else (labels,)
+    for label in labels:
+        signal, gate = _seq_signal_for_label(label, features)
+        if signal < gate:
+            return False
+    return True
+
+
+def _seq_group_released(labels, features):
+    labels = labels if isinstance(labels, tuple) else (labels,)
+    for label in labels:
+        signal, gate = _seq_signal_for_label(label, features)
+        if signal >= gate:
+            return False
+    return True
+
+
+TIPTOES = ((LIFT_L,), (LIFT_R,),) * 3
 
 # simple German names for the movements, shown to the patient
 LABEL_TEXT_DE = {
@@ -146,29 +179,29 @@ ROUTINE = [
     # ----- Dance (3 s calibration reward between sections) -----
     ("Tanz", _seq("Zehenspitzen", TIPTOES, video=(27.0, 37.0))),
     ("Tanz", _calib()),
-    ("Tanz", _seq("Rechtes Bein heben", (LIFT_R,) * 3, video=(28.0, 29.0))),
+    ("Tanz", _seq("Rechtes Bein heben", ((LIFT_R,),) * 3, video=(28.0, 29.0))),
     ("Tanz", _calib()),
-    ("Tanz", _seq("Linkes Bein heben", (LIFT_L,) * 3, video=(29.0, 30.0))),
+    ("Tanz", _seq("Linkes Bein heben", ((LIFT_L,),) * 3, video=(29.0, 30.0))),
     ("Tanz", _calib()),
-    ("Tanz", _seq("Kleine Schritte", (LIFT_L,) * 3, video=(37.0, 40.0))),
+    ("Tanz", _seq("Kleine Schritte", ((LIFT_L, LIFT_R,),) * 3, video=(37.0, 40.0))),
     ("Tanz", _calib()),
-    ("Tanz", _seq("Nach vorne beugen", (LEAN, LEAN), video=(40.0, 47.0))),
+    ("Tanz", _seq("Nach vorne beugen", ((LEAN,),) * 2, video=(40.0, 47.0))),
     ("Tanz", _calib()),
-    ("Tanz", _seq("Nach vorne beugen", (LEAN, LEAN), video=(47.0, 53.0))),
+    ("Tanz", _seq("Nach vorne beugen", ((LEAN, TURN_LEFT,), (LEAN, TURN_RIGHT,),), video=(47.0, 53.0))),
     ("Tanz", _calib()),
-    ("Tanz", _seq("Oberkörper drehen", (TURN_LEFT, TURN_RIGHT),
+    ("Tanz", _seq("Oberkörper drehen", ((TURN_LEFT,), (TURN_RIGHT,),),
                    video=(53.0, 59.0))),
     ("Tanz", _calib()),
     ("Tanz", _seq("Zehenspitzen", TIPTOES, video=(59.0, 67.0))),
     ("Tanz", _calib()),
-    ("Tanz", _seq("Nach vorne beugen", (LEAN, LEAN), video=(67.0, 74.0))),
+    ("Tanz", _seq("Nach vorne beugen", ((LEAN,),) * 2, video=(67.0, 74.0))),
     ("Tanz", _calib()),
-    ("Tanz", _seq("Nach vorne beugen", (LEAN, LEAN), video=(74.0, 80.0))),
+    ("Tanz", _seq("Nach vorne beugen", ((LEAN, TURN_LEFT,), (LEAN, TURN_RIGHT,),), video=(74.0, 80.0))),
     ("Tanz", _calib()),
-    ("Tanz", _seq("Oberkörper drehen", (TURN_LEFT, TURN_RIGHT),
+    ("Tanz", _seq("Oberkörper drehen", ((TURN_LEFT,), (TURN_RIGHT,),),
                    video=(80.0, 87.0))),
     ("Tanz", _calib()),
-    ("Tanz", _seq("Kleine Schritte", (LIFT_R,) * 3, video=(93.0, 100.0))),
+    ("Tanz", _seq("Kleine Schritte", ((LIFT_L, LIFT_R,),) * 3, video=(93.0, 100.0))),
 ]
 
 
@@ -304,8 +337,11 @@ class RoutineGame:
 
         if kind == "seq":
             expected = step["labels"][self._count]
-            signal, gate = _seq_signal_for_label(expected, features)
-            if signal < gate:
+            if not self._seq_trigger_armed:
+                if _seq_group_released(expected, features):
+                    self._seq_trigger_armed = True
+                return None
+            if not _seq_group_ready(expected, features):
                 self._seq_trigger_armed = True
                 return None
             if self._seq_trigger_armed:
@@ -343,22 +379,31 @@ class RoutineGame:
             progress = min(1.0, elapsed / step["seconds"])
         else:
             total = len(step["labels"])
-            nxt = step["labels"][self._count] if self._count < total else ""
+            nxt = step["labels"][self._count] if self._count < total else ()
+            if isinstance(nxt, tuple):
+                nxt_text = " + ".join(LABEL_TEXT_DE.get(label, label)
+                                       for label in nxt)
+            else:
+                nxt_text = LABEL_TEXT_DE.get(nxt, nxt)
             detail = "%d / %d  ·  jetzt: %s" % (
-                self._count, total, LABEL_TEXT_DE.get(nxt, nxt))
+                self._count, total, nxt_text)
             progress = self._count / float(total)
         if self._i + 1 < len(self.routine):
             next_name = self.routine[self._i + 1][1]["name"]
         else:
             next_name = "geschafft!"
         if kind == "seq" and self._count < len(step["labels"]):
-            expected_label = step["labels"][self._count]
+            expected_labels = step["labels"][self._count]
+            expected_label = expected_labels[0] if len(expected_labels) == 1 else expected_labels
         elif kind in ("hold", "prep"):
             expected_label = step["label"]
+            expected_labels = (step["label"],)
         else:
             expected_label = None
+            expected_labels = tuple()
         return {
             "expected_label": expected_label,
+            "expected_labels": expected_labels,
             "video_segment": step.get("video"),
             "phase": self._phase,
             "step_index": self._i + 1,

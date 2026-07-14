@@ -1095,6 +1095,16 @@ def main():
             self._threshold = threshold
             self._active = False
             self._active_color = "#2ecc71"
+            self._inactive_color = "#9fbadbc3"
+            self._chunk_active = "#2ecc71"
+            self._chunk_inactive = "#9fbadbc3"
+            self._apply_style()
+
+        def _apply_style(self):
+            chunk_color = self._chunk_active if self._active else self._chunk_inactive
+            self.setStyleSheet(
+                "QProgressBar{background:#1c1f26; border:none; border-radius:7px;}"
+                "QProgressBar::chunk{background:%s; border-radius:7px;}" % chunk_color)
 
         def set_active(self, active, color=None):
             changed = False
@@ -1105,6 +1115,7 @@ def main():
                 self._active = active
                 changed = True
             if changed:
+                self._apply_style()
                 self.update()
 
         def paintEvent(self, ev):
@@ -1113,7 +1124,7 @@ def main():
             x = max(1, min(self.width() - 2,
                            int(self.width() * self._threshold)))
             pen = QtGui.QPen(
-                QtGui.QColor(self._active_color if self._active else "#e5e7eb"))
+                QtGui.QColor(self._active_color if self._active else self._inactive_color))
             pen.setWidth(4 if self._active else 2)
             p.setPen(pen)
             p.drawLine(x, 1, x, self.height() - 2)
@@ -1534,18 +1545,29 @@ def main():
         score_label.setText(
             "Punkte: %d   Runden: %d" % (game["score"], game["rounds_completed"]))
         seq_label.setText(render_routine_html(game))
-        # green threshold line on the bar of the currently expected movement
-        expected_label = game.get("expected_label")
-        expected_bar = {
+        # highlight every bar that belongs to the currently expected rep
+        # and fade the unrelated bars so the patient focuses on the target.
+        expected_labels = game.get("expected_labels")
+        if not expected_labels:
+            expected_label = game.get("expected_label")
+            if expected_label is None:
+                expected_labels = tuple()
+            elif isinstance(expected_label, tuple):
+                expected_labels = expected_label
+            else:
+                expected_labels = (expected_label,)
+        label_to_bar = {
             LEAN: "lean", LIFT_L: "lift_L", LIFT_R: "lift_R",
             TURN_LEFT: "turn_L", TURN_RIGHT: "turn_R",
-        }.get(expected_label)
-        expected_color = "#2ecc71"
-        if game.get("step_kind") == "prep" and expected_label in DISPLAY:
-            expected_color = "#2ecc71"
+        }
+        active_bars = {}
+        for expected_label in expected_labels:
+            bar_key = label_to_bar.get(expected_label)
+            if bar_key is not None:
+                active_bars[bar_key] = "#2ecc71"
         for bar_key, b in bars.items():
-            b.set_active(bar_key == expected_bar,
-                         expected_color if bar_key == expected_bar else None)
+            b.set_active(bar_key in active_bars,
+                         active_bars.get(bar_key))
         if event is not None and event_ts > handled_event_ts[0]:
             # fire achievement sound + floating animation ONCE per event
             handled_event_ts[0] = event_ts
