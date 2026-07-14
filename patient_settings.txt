@@ -1,0 +1,8 @@
+# Patient-specific classifier threshold settings
+# Format: KEY=FLOAT
+
+LEAN_GATE=0.45
+LIFT_L_GATE=0.25
+LIFT_R_GATE=0.25
+TURN_L_GATE=0.35
+TURN_R_GATE=0.35

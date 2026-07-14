@@ -18,6 +18,10 @@
 
 import time
 
+from classify import (
+    LEAN_GATE, LIFT_L_GATE, LIFT_R_GATE, TURN_L_GATE, TURN_R_GATE,
+)
+
 NEUTRAL = "NEUTRAL"
 LEAN = "LEAN"
 LIFT_L = "LIFT_L"
@@ -34,8 +38,11 @@ CALIB_STEP_SECONDS = 3.0
 
 # Sequence progression gates. Keep in sync with classify.py thresholds so
 # the routine uses the same movement intensity criterion as recognition.
-SEQ_TILT_GATE = 0.45
-SEQ_TURN_GATE = 0.35
+SEQ_LEAN_GATE = LEAN_GATE
+SEQ_LIFT_L_GATE = LIFT_L_GATE
+SEQ_LIFT_R_GATE = LIFT_R_GATE
+SEQ_TURN_L_GATE = TURN_L_GATE
+SEQ_TURN_R_GATE = TURN_R_GATE
 
 
 def _hold(name, label, seconds, video=None):
@@ -86,16 +93,16 @@ def _seq_signal_for_label(label, features):
     # Extra simultaneous features are intentionally ignored.
     features = features or {}
     if label == LEAN:
-        return max(0.0, float(features.get("lean", 0.0))), SEQ_TILT_GATE
+        return max(0.0, float(features.get("lean", 0.0))), SEQ_LEAN_GATE
     if label == LIFT_L:
-        return max(0.0, float(features.get("lift_L", 0.0))), SEQ_TILT_GATE
+        return max(0.0, float(features.get("lift_L", 0.0))), SEQ_LIFT_L_GATE
     if label == LIFT_R:
-        return max(0.0, float(features.get("lift_R", 0.0))), SEQ_TILT_GATE
+        return max(0.0, float(features.get("lift_R", 0.0))), SEQ_LIFT_R_GATE
     turn = float(features.get("turn", 0.0))
     if label == TURN_LEFT:
-        return max(0.0, -turn), SEQ_TURN_GATE
+        return max(0.0, -turn), SEQ_TURN_L_GATE
     if label == TURN_RIGHT:
-        return max(0.0, turn), SEQ_TURN_GATE
+        return max(0.0, turn), SEQ_TURN_R_GATE
     return 0.0, 1.0
 
 
@@ -346,7 +353,7 @@ class RoutineGame:
             next_name = "geschafft!"
         if kind == "seq" and self._count < len(step["labels"]):
             expected_label = step["labels"][self._count]
-        elif kind == "hold":
+        elif kind in ("hold", "prep"):
             expected_label = step["label"]
         else:
             expected_label = None

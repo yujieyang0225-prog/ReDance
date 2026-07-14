@@ -21,7 +21,7 @@ from mapping import (
 )
 from classify import (
     ActionClassifier, NEUTRAL, LEAN, LIFT_L, LIFT_R, TURN_LEFT, TURN_RIGHT,
-    TILT_GATE, TURN_GATE,
+    LEAN_GATE, LIFT_L_GATE, LIFT_R_GATE, TURN_L_GATE, TURN_R_GATE,
 )
 from game import (
     RoutineGame, POINTS_PER_REP, POINTS_CALIB, POINTS_STEP_COMPLETE,
@@ -1094,10 +1094,17 @@ def main():
             super().__init__()
             self._threshold = threshold
             self._active = False
+            self._active_color = "#2ecc71"
 
-        def set_active(self, active):
+        def set_active(self, active, color=None):
+            changed = False
+            if color is not None and color != self._active_color:
+                self._active_color = color
+                changed = True
             if active != self._active:
                 self._active = active
+                changed = True
+            if changed:
                 self.update()
 
         def paintEvent(self, ev):
@@ -1106,7 +1113,7 @@ def main():
             x = max(1, min(self.width() - 2,
                            int(self.width() * self._threshold)))
             pen = QtGui.QPen(
-                QtGui.QColor("#2ecc71" if self._active else "#e5e7eb"))
+                QtGui.QColor(self._active_color if self._active else "#e5e7eb"))
             pen.setWidth(4 if self._active else 2)
             p.setPen(pen)
             p.drawLine(x, 1, x, self.height() - 2)
@@ -1354,8 +1361,11 @@ def main():
     grid.setHorizontalSpacing(12)
     grid.setVerticalSpacing(10)
     BAR_THRESHOLDS = {
-        "lean": TILT_GATE, "lift_L": TILT_GATE, "lift_R": TILT_GATE,
-        "turn_L": TURN_GATE, "turn_R": TURN_GATE,
+        "lean": LEAN_GATE,
+        "lift_L": LIFT_L_GATE,
+        "lift_R": LIFT_R_GATE,
+        "turn_L": TURN_L_GATE,
+        "turn_R": TURN_R_GATE,
     }
     for r, (key, name) in enumerate([
             ("lean", "Beugen"), ("lift_L", "Bein links"),
@@ -1525,12 +1535,17 @@ def main():
             "Punkte: %d   Runden: %d" % (game["score"], game["rounds_completed"]))
         seq_label.setText(render_routine_html(game))
         # green threshold line on the bar of the currently expected movement
+        expected_label = game.get("expected_label")
         expected_bar = {
             LEAN: "lean", LIFT_L: "lift_L", LIFT_R: "lift_R",
             TURN_LEFT: "turn_L", TURN_RIGHT: "turn_R",
-        }.get(game.get("expected_label"))
+        }.get(expected_label)
+        expected_color = "#2ecc71"
+        if game.get("step_kind") == "prep" and expected_label in DISPLAY:
+            expected_color = "#2ecc71"
         for bar_key, b in bars.items():
-            b.set_active(bar_key == expected_bar)
+            b.set_active(bar_key == expected_bar,
+                         expected_color if bar_key == expected_bar else None)
         if event is not None and event_ts > handled_event_ts[0]:
             # fire achievement sound + floating animation ONCE per event
             handled_event_ts[0] = event_ts
