@@ -974,10 +974,15 @@ def main():
             self._data = None
             self._renderer = None
             self._joint_ids = {}
+            self._source_pixmap = None
             
             layout = QtWidgets.QVBoxLayout(self)
             layout.setContentsMargins(0, 0, 0, 0)
             layout.setSpacing(0)
+            self.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Expanding,
+            )
             
             title = QtWidgets.QLabel("Avatar")
             title.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
@@ -985,7 +990,11 @@ def main():
             layout.addWidget(title)
             
             self._image = QtWidgets.QLabel()
-            self._image.setMinimumSize(280, 280)
+            self._image.setMinimumSize(0, 0)
+            self._image.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Expanding,
+            )
             self._image.setStyleSheet("background:#1c1f26;")
             self._image.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(self._image, stretch=1)
@@ -1014,6 +1023,26 @@ def main():
             if not self._mujoco_ok:
                 self._image.setText("(avatar unavailable)")
                 self._image.setStyleSheet("background:#1c1f26; color:#7f8791;")
+
+        def _refresh_avatar_pixmap(self):
+            if self._source_pixmap is None or self._source_pixmap.isNull():
+                return
+            target = self._image.size()
+            if target.width() <= 0 or target.height() <= 0:
+                return
+            scaled = self._source_pixmap.scaled(
+                target,
+                QtCore.Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            )
+            x = max(0, (scaled.width() - target.width()) // 2)
+            y = max(0, (scaled.height() - target.height()) // 2)
+            self._image.setPixmap(
+                scaled.copy(x, y, target.width(), target.height()))
+
+        def resizeEvent(self, event):
+            super().resizeEvent(event)
+            self._refresh_avatar_pixmap()
 
         def update_from_state(self, label, features):
             if not self._mujoco_ok:
@@ -1056,8 +1085,8 @@ def main():
                     h, w = img.shape[:2]
                     bytes_per_line = 3 * w
                     q_img = QImage(img.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-                    pm = QPixmap.fromImage(q_img)
-                    self._image.setPixmap(pm)
+                    self._source_pixmap = QPixmap.fromImage(q_img)
+                    self._refresh_avatar_pixmap()
             except Exception as e:
                 print("Avatar update error:", e)
 
@@ -1443,21 +1472,25 @@ def main():
     # Three-column layout: left (avatar) | center (status/game) | right (video)
     left = QtWidgets.QVBoxLayout()
     left.setSpacing(16)
-    root.addLayout(left, 2)
+    root.addLayout(left, 1)
     
     center = QtWidgets.QVBoxLayout()
     center.setSpacing(16)
-    root.addLayout(center, 3)
+    root.addLayout(center, 1)
 
     right = QtWidgets.QVBoxLayout()
     right.setSpacing(10)
-    root.addLayout(right, 2)
+    root.addLayout(right, 1)
 
     # Left: avatar panel (only in live mode)
     avatar_panel = None
     if args.mode == "live":
         avatar_panel = AvatarPanel()
         left.addWidget(avatar_panel, stretch=1)
+        avatar_panel.update_from_state(
+            NEUTRAL,
+            {"lean": 0.0, "lift_L": 0.0, "lift_R": 0.0, "turn": 0.0},
+        )
     
     # Right: video panel
     video_panel = InstructionVideoPlayer(VIDEO_FOLDER)
@@ -1676,6 +1709,9 @@ def main():
             status.setText("Sensor-Fehler: " + error)
             return
 
+        if avatar_panel is not None:
+            avatar_panel.update_from_state(label, feats)
+
         if not session_started[0]:
             if music_player is not None:
                 music_player.pause()
@@ -1688,10 +1724,6 @@ def main():
             for b in bars.values():
                 b.setValue(0)
             return
-        
-        # Update avatar panel if present
-        if avatar_panel is not None:
-            avatar_panel.update_from_state(label, feats)
         
         video_panel.set_video(game["step_name"], game.get("video_segment"),
                       game.get("step_kind"))
