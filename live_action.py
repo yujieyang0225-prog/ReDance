@@ -8,6 +8,7 @@ import threading
 import argparse
 import math
 import subprocess
+import random
 
 try:
     import serial
@@ -66,10 +67,26 @@ DISPLAY = {
 # Spoken reward audio files, generated on first run when missing.
 SOUND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sounds")
 SPOKEN_AUDIO = {
-    "event_correct": ("super.wav", "Super!"),
-    # "event_calib_reward": ("perfekt.wav", "Perfekt!"),
-    "event_step_complete": ("perfekt.wav", "Perfekt!"),
-    "event_routine_complete": ("geschafft.wav", "Geschafft!"),
+    # These event keys rotate randomly between several encouragement clips.
+    "event_correct": (
+        ("sehr_gut.wav", "Sehr gut!"),
+        ("super.wav", "Super!"),
+        ("schoen.wav", "Schoen!"),
+        ("geschafft.wav", "Geschafft!"),
+    ),
+    # "event_calib_reward": ("schoen.wav", "Schoen!"),
+    "event_step_complete": (
+        ("sehr_gut.wav", "Sehr gut!"),
+        ("super.wav", "Super!"),
+        ("schoen.wav", "Schoen!"),
+        ("geschafft.wav", "Geschafft!"),
+    ),
+    "event_routine_complete": (
+        ("sehr_gut.wav", "Sehr gut!"),
+        ("super.wav", "Super!"),
+        ("schoen.wav", "Schoen!"),
+        ("geschafft.wav", "Geschafft!"),
+    ),
     "reps_left_3": ("noch_dreimal.wav", "Noch dreimal!"),
     "reps_left_2": ("noch_zweimal.wav", "Noch zweimal!"),
     "reps_left_1": ("noch_einmal.wav", "Noch einmal!"),
@@ -77,6 +94,16 @@ SPOKEN_AUDIO = {
     "next_reps_2": ("wir_machen_zweimal.wav", "Wir machen es zweimal!"),
     "next_reps_1": ("wir_machen_einmal.wav", "Wir machen es einmal!"),
 }
+
+
+def _speech_variants(audio_entry):
+    # Normal entries are (filename, text); randomized entries are tuples
+    # of those pairs.
+    if (isinstance(audio_entry, tuple)
+            and len(audio_entry) == 2
+            and isinstance(audio_entry[0], str)):
+        return [audio_entry]
+    return list(audio_entry)
 
 EVENT_SPEECH_KEYS = {
     "correct": "event_correct",
@@ -89,36 +116,37 @@ EVENT_SPEECH_KEYS = {
 def ensure_event_sounds():
     os.makedirs(SOUND_DIR, exist_ok=True)
     created = set()
-    for fname, spoken_text in SPOKEN_AUDIO.values():
-        if fname in created:
-            continue
-        created.add(fname)
-        path = os.path.join(SOUND_DIR, fname)
-        if os.path.exists(path):
-            continue
-        if os.name != "nt":
-            continue
-        escaped_path = path.replace("'", "''")
-        escaped_text = spoken_text.replace("'", "''")
-        command = (
-            "Add-Type -AssemblyName System.Speech;"
-            "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer;"
-            "$s.Rate = 0;"
-            "$s.Volume = 100;"
-            "$s.SetOutputToWaveFile('%s');"
-            "$s.Speak('%s');"
-            "$s.Dispose()" % (escaped_path, escaped_text)
-        )
-        try:
-            subprocess.run(
-                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                 "-Command", command],
-                check=True,
-                capture_output=True,
-                text=True,
+    for audio_entry in SPOKEN_AUDIO.values():
+        for fname, spoken_text in _speech_variants(audio_entry):
+            if fname in created:
+                continue
+            created.add(fname)
+            path = os.path.join(SOUND_DIR, fname)
+            if os.path.exists(path):
+                continue
+            if os.name != "nt":
+                continue
+            escaped_path = path.replace("'", "''")
+            escaped_text = spoken_text.replace("'", "''")
+            command = (
+                "Add-Type -AssemblyName System.Speech;"
+                "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+                "$s.Rate = 0;"
+                "$s.Volume = 100;"
+                "$s.SetOutputToWaveFile('%s');"
+                "$s.Speak('%s');"
+                "$s.Dispose()" % (escaped_path, escaped_text)
             )
-        except Exception:
-            pass
+            try:
+                subprocess.run(
+                    ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                     "-Command", command],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except Exception:
+                pass
 
 VIDEO_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             video_folder)
@@ -1060,8 +1088,8 @@ def main():
                     "torso_bend": LEAN_MAX_DEG * lean,
                     "left_hip": -LIFT_MAX_DEG * lift_l,
                     "right_hip": -LIFT_MAX_DEG * lift_r,
-                    "torso_rotation": -TURN_MAX_DEG * turn,
-                    "head": -TURN_MAX_DEG * turn,
+                    "torso_rotation": TURN_MAX_DEG * turn,
+                    "head": TURN_MAX_DEG * turn,
                 }
                 
                 # Apply angles to model (convert degrees to radians)
@@ -1113,9 +1141,15 @@ def main():
         return isinstance(key, str) and key.startswith("event_")
 
     def _play_speech_key(key):
-        eff = sound_effects.get(key)
-        if eff is None:
+        eff_or_pool = sound_effects.get(key)
+        if eff_or_pool is None:
             return False
+        if isinstance(eff_or_pool, list):
+            if not eff_or_pool:
+                return False
+            eff = random.choice(eff_or_pool)
+        else:
+            eff = eff_or_pool
         speech_current[0] = key
         eff.stop()
         eff.play()
@@ -1151,21 +1185,27 @@ def main():
     try:
         from PyQt6.QtMultimedia import QSoundEffect
         ensure_event_sounds()
-        for ev_name, (fname, _spoken_text) in SPOKEN_AUDIO.items():
-            eff = QSoundEffect()
-            eff.setSource(QUrl.fromLocalFile(os.path.join(SOUND_DIR, fname)))
-            eff.setVolume(0.6)
-            sound_effects[ev_name] = eff
+        for ev_name, audio_entry in SPOKEN_AUDIO.items():
+            effects = []
+            for fname, _spoken_text in _speech_variants(audio_entry):
+                eff = QSoundEffect()
+                eff.setSource(QUrl.fromLocalFile(os.path.join(SOUND_DIR, fname)))
+                eff.setVolume(0.6)
+                effects.append(eff)
+            if effects:
+                sound_effects[ev_name] = effects if len(effects) > 1 else effects[0]
 
-        for key, eff in sound_effects.items():
-            def _on_playing_changed(speech_key=key, effect=eff):
-                if effect.isPlaying():
-                    return
-                if speech_current[0] == speech_key:
-                    speech_current[0] = None
-                    _drain_speech_queue()
+        for key, eff_or_pool in sound_effects.items():
+            effect_list = eff_or_pool if isinstance(eff_or_pool, list) else [eff_or_pool]
+            for eff in effect_list:
+                def _on_playing_changed(speech_key=key, effect=eff):
+                    if effect.isPlaying():
+                        return
+                    if speech_current[0] == speech_key:
+                        speech_current[0] = None
+                        _drain_speech_queue()
 
-            eff.playingChanged.connect(_on_playing_changed)
+                eff.playingChanged.connect(_on_playing_changed)
     except Exception:
         sound_effects = {}
 
