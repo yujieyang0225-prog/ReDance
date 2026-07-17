@@ -1,0 +1,339 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Rehab System Flow</title>
+<style>
+  :root {
+    --bg: #F6F9F8;
+    --surface: #FFFFFF;
+    --ink: #182826;
+    --ink-soft: #4A5E5A;
+    --line: #D3DEDA;
+    --hw: #3E5C76;       --hw-bg: #EDF2F7;
+    --proc: #0E7C6B;     --proc-bg: #EAF4F1;
+    --file: #A8681C;     --file-bg: #FBF3E7;
+    --gui: #5D5A75;      --gui-bg: #F0EFF6;
+    --edge: #7A928C;
+    --shadow: 0 1px 3px rgba(24, 40, 38, 0.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0F1715;
+      --surface: #17211F;
+      --ink: #DEE9E6;
+      --ink-soft: #93A7A2;
+      --line: #2A3835;
+      --hw: #8FB0CC;     --hw-bg: #1B2733;
+      --proc: #4FC0AB;   --proc-bg: #14312B;
+      --file: #DFA45E;   --file-bg: #33270F;
+      --gui: #A9A5C9;    --gui-bg: #262433;
+      --edge: #5E736D;
+      --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #F6F9F8; --surface: #FFFFFF; --ink: #182826; --ink-soft: #4A5E5A;
+    --line: #D3DEDA;
+    --hw: #3E5C76; --hw-bg: #EDF2F7; --proc: #0E7C6B; --proc-bg: #EAF4F1;
+    --file: #A8681C; --file-bg: #FBF3E7; --gui: #5D5A75; --gui-bg: #F0EFF6;
+    --edge: #7A928C; --shadow: 0 1px 3px rgba(24, 40, 38, 0.08);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0F1715; --surface: #17211F; --ink: #DEE9E6; --ink-soft: #93A7A2;
+    --line: #2A3835;
+    --hw: #8FB0CC; --hw-bg: #1B2733; --proc: #4FC0AB; --proc-bg: #14312B;
+    --file: #DFA45E; --file-bg: #33270F; --gui: #A9A5C9; --gui-bg: #262433;
+    --edge: #5E736D; --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+    margin: 0;
+    padding: 40px 20px 72px;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; }
+
+  h1 {
+    font-family: "Avenir Next", "Avenir", system-ui, sans-serif;
+    font-size: 30px; font-weight: 600; letter-spacing: -0.01em;
+    margin: 0 0 6px; text-wrap: balance;
+  }
+  .sub { color: var(--ink-soft); margin: 0 0 8px; max-width: 62ch; }
+  .sub code { font-size: 13px; }
+  code {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12.5px;
+  }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 10px 18px;
+    margin: 22px 0 34px; padding: 14px 18px;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; box-shadow: var(--shadow);
+  }
+  .key { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-soft); }
+  .swatch { width: 22px; height: 14px; border-radius: 4px; border: 1.5px solid; flex: none; }
+  .swatch.hw   { background: var(--hw-bg);   border-color: var(--hw); }
+  .swatch.proc { background: var(--proc-bg); border-color: var(--proc); }
+  .swatch.file { background: var(--file-bg); border-color: var(--file); border-style: dashed; }
+  .swatch.gui  { background: var(--gui-bg);  border-color: var(--gui); }
+
+  .stage-label {
+    font-family: "Avenir Next", "Avenir", system-ui, sans-serif;
+    font-size: 12px; font-weight: 600; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--ink-soft);
+    margin: 0 0 14px;
+  }
+  .stage-label b { color: var(--proc); font-weight: 700; }
+
+  /* ---- nodes ---- */
+  .node {
+    background: var(--surface); border: 1.5px solid var(--line);
+    border-radius: 10px; padding: 12px 16px;
+    box-shadow: var(--shadow);
+  }
+  .node h3 { margin: 0; font-size: 14px; font-weight: 650; }
+  .node p { margin: 4px 0 0; font-size: 13px; color: var(--ink-soft); }
+  .node.hw   { border-color: var(--hw);   background: var(--hw-bg); }
+  .node.proc { border-color: var(--proc); background: var(--proc-bg); }
+  .node.gui  { border-color: var(--gui);  background: var(--gui-bg); }
+  .node.file {
+    border: 1.5px dashed var(--file); background: var(--file-bg);
+    position: relative;
+  }
+  .node.file::after {   /* folded document corner */
+    content: ""; position: absolute; top: -1.5px; right: -1.5px;
+    width: 14px; height: 14px;
+    background: linear-gradient(225deg, var(--bg) 50%, var(--file) 50%);
+    border-bottom-left-radius: 6px;
+  }
+  .node.hw h3   { color: var(--hw); }
+  .node.proc h3 { color: var(--proc); }
+  .node.file h3 { color: var(--file); }
+  .node.gui h3  { color: var(--gui); }
+
+  /* ---- arrows ---- */
+  .arrow {
+    display: flex; flex-direction: column; align-items: center;
+    padding: 2px 0;
+  }
+  .arrow .stem { width: 2px; height: 16px; background: var(--edge); }
+  .arrow .head {
+    width: 0; height: 0;
+    border-left: 6px solid transparent; border-right: 6px solid transparent;
+    border-top: 8px solid var(--edge);
+  }
+  .arrow .note {
+    font-size: 12px; color: var(--ink-soft); padding: 1px 0 3px;
+    text-align: center; max-width: 46ch;
+  }
+  .arrow .note code { font-size: 11.5px; }
+
+  /* ---- three source lanes ---- */
+  .lanes {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px;
+  }
+  @media (max-width: 720px) { .lanes { grid-template-columns: 1fr; } }
+  .lane {
+    display: flex; flex-direction: column;
+    border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px; background: color-mix(in srgb, var(--surface) 55%, transparent);
+  }
+  .lane-title {
+    font-size: 12px; font-weight: 650; letter-spacing: 0.07em;
+    text-transform: uppercase; text-align: center;
+    color: var(--ink-soft); margin: 0 0 12px;
+  }
+  .lane-title code { font-size: 12px; color: var(--proc); }
+  .lane .node { flex: none; }
+  .lane .spacer { flex: 1; }
+
+  .converge {
+    display: flex; flex-direction: column; align-items: center;
+    margin-top: 4px;
+  }
+
+  /* ---- pipeline column ---- */
+  .pipe { display: flex; flex-direction: column; align-items: center; }
+  .pipe .node { width: min(560px, 100%); box-sizing: border-box; text-align: center; }
+
+  /* ---- outputs split ---- */
+  .split {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 18px;
+    width: min(760px, 100%); margin: 0 auto;
+  }
+  @media (max-width: 640px) { .split { grid-template-columns: 1fr; } }
+  .split-col { display: flex; flex-direction: column; align-items: center; }
+  .split-col .node { width: 100%; box-sizing: border-box; text-align: center; }
+
+  .loopback {
+    width: min(760px, 100%); margin: 26px auto 0;
+    border: 1.5px solid var(--line); border-radius: 12px;
+    background: var(--surface); box-shadow: var(--shadow);
+    padding: 14px 18px;
+  }
+  .loopback h3 { margin: 0 0 4px; font-size: 14px; }
+  .loopback h3 .ret { color: var(--proc); }
+  .loopback p { margin: 0; font-size: 13px; color: var(--ink-soft); }
+
+  .stage { margin-bottom: 8px; }
+
+  .foot {
+    margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--line);
+    font-size: 12.5px; color: var(--ink-soft); max-width: 72ch;
+  }
+  kbd {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11.5px;
+    border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px;
+    padding: 0 5px; background: var(--surface);
+  }
+</style></head><body>
+
+<div class="wrap">
+  <h1>How the rehab system runs</h1>
+  <p class="sub">End-to-end flow on branch <code>Combination</code>: a motion source produces
+  normalized features, one shared classifier names the movement, the game scores it, and the
+  results drive the GUI, the instruction video, and (in sensor mode) the avatar.</p>
+
+  <div class="legend">
+    <span class="key"><span class="swatch hw"></span> Hardware</span>
+    <span class="key"><span class="swatch proc"></span> Python process / code</span>
+    <span class="key"><span class="swatch file"></span> Shared JSON file (30&nbsp;ms atomic writes)</span>
+    <span class="key"><span class="swatch gui"></span> What the user sees</span>
+  </div>
+
+  <!-- STAGE 1: three motion sources -->
+  <section class="stage">
+    <p class="stage-label">Stage 1 · Motion source — pick one with <b><code>live_action.py --mode …</code></b></p>
+    <div class="lanes">
+
+      <div class="lane">
+        <p class="lane-title"><code>--mode live</code> · sensors</p>
+        <div class="node hw">
+          <h3>ESP32 + 4 IMUs</h3>
+          <p>lumbar&nbsp;0 · clavicular&nbsp;1 · thighL&nbsp;3 · thighR&nbsp;4<br>
+          serial 115200&nbsp;baud, ~60&nbsp;Hz</p>
+        </div>
+        <div class="arrow"><span class="stem"></span><span class="head"></span>
+          <span class="note"><code>parse_line()</code> · keep line if all <code>REQUIRED_CHANNELS</code> (IMUs 0/3/4) present</span>
+        </div>
+        <div class="node proc">
+          <h3>mapping.py</h3>
+          <p>2&nbsp;s neutral calibration → gravity &amp; yaw axis detected →
+          <code>MovementMapper</code> turns accel tilt + lumbar gyro into features</p>
+        </div>
+        <div class="spacer"></div>
+      </div>
+
+      <div class="lane">
+        <p class="lane-title"><code>--mode mujoco</code> · avatar</p>
+        <div class="node gui">
+          <h3>MuJoCo viewer keys</h3>
+          <p><kbd>1</kbd>–<kbd>5</kbd> each queue ONE repetition<br>
+          turn&nbsp;L / turn&nbsp;R / lean / leg&nbsp;L / leg&nbsp;R · <kbd>0</kbd> reset</p>
+        </div>
+        <div class="arrow"><span class="stem"></span><span class="head"></span>
+          <span class="note">sine rep 2&nbsp;s + 0.4&nbsp;s neutral gap → joint angles → <code>mj_forward</code></span>
+        </div>
+        <div class="node proc">
+          <h3>run_professional_rehab.py</h3>
+          <p>animates the avatar, publishes joint angles (torso rotation / bend, both hips, in degrees)</p>
+        </div>
+        <div class="arrow"><span class="stem"></span><span class="head"></span></div>
+        <div class="node file">
+          <h3>mujoco_motion.json</h3>
+          <p>read by <code>MujocoMotionClassifier</code>: 2&nbsp;s baseline, angles ÷ max range → features · stale &gt; 0.5&nbsp;s = “waiting”</p>
+        </div>
+      </div>
+
+      <div class="lane">
+        <p class="lane-title"><code>--mode simulate</code> · keyboard</p>
+        <div class="node gui">
+          <h3>Simulator keys</h3>
+          <p><kbd>Q</kbd> neutral · <kbd>W</kbd> lean · <kbd>E</kbd>/<kbd>R</kbd> lifts ·
+          <kbd>T</kbd>/<kbd>Y</kbd> turns</p>
+        </div>
+        <div class="arrow"><span class="stem"></span><span class="head"></span></div>
+        <div class="node proc">
+          <h3>SimulationClassifier</h3>
+          <p>maps each key straight to full-strength features — for testing the game without hardware</p>
+        </div>
+        <div class="spacer"></div>
+      </div>
+    </div>
+
+    <div class="converge">
+      <div class="arrow"><span class="stem"></span><span class="head"></span>
+        <span class="note">all three sources emit the same normalized features<br>
+        <code>{lean, lift_L, lift_R ∈ [0,1] · turn ∈ [−1,1], + = right}</code></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- STAGE 2: shared pipeline -->
+  <section class="stage pipe">
+    <p class="stage-label">Stage 2 · One shared recognition pipeline (identical for sensors and avatar)</p>
+    <div class="node proc">
+      <h3>classify.py · ActionClassifier</h3>
+      <p>tilt actions beat turns (yaw cross-talk lockout) · tilt gate 0.45 · turn gate 0.35 ·
+      5-sample debounce → ONE label:<br>
+      <code>NEUTRAL · LEAN · LIFT_L · LIFT_R · TURN_LEFT · TURN_RIGHT</code></p>
+    </div>
+    <div class="arrow"><span class="stem"></span><span class="head"></span>
+      <span class="note">new label edge (NEUTRAL → action) counts as one move</span>
+    </div>
+    <div class="node proc">
+      <h3>game.py · SequenceGame</h3>
+      <p>required order: LEAN → TURN&nbsp;LEFT → LIFT&nbsp;RIGHT → TURN&nbsp;RIGHT<br>
+      +10 per correct step · +50 completion bonus · wrong move resets the sequence</p>
+    </div>
+    <div class="arrow"><span class="stem"></span><span class="head"></span>
+      <span class="note">classifier thread writes state + label + features + score</span>
+    </div>
+    <div class="node file" style="width: min(420px, 100%); box-sizing: border-box; text-align: center;">
+      <h3>live_state.json</h3>
+      <p>the single source of truth every display reads</p>
+    </div>
+  </section>
+
+  <div class="converge">
+    <div class="arrow"><span class="stem"></span><span class="head"></span></div>
+  </div>
+
+  <!-- STAGE 3: outputs -->
+  <section class="stage">
+    <p class="stage-label" style="text-align:center;">Stage 3 · Feedback to the user</p>
+    <div class="split">
+      <div class="split-col">
+        <div class="node gui">
+          <h3>Recognition window</h3>
+          <p>big movement label · four feature bars ·
+          score, rounds &amp; sequence progress · event flashes (+10 / reset / +50)</p>
+        </div>
+      </div>
+      <div class="split-col">
+        <div class="node gui">
+          <h3>Instruction video panel</h3>
+          <p>loops the video segment matching the current label
+          (<code>VIDEO_SEGMENTS_SECONDS</code> in <code>live_action.py</code>)</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="loopback">
+      <h3><span class="ret">⮌ Live-mode loop</span> — press <kbd>L</kbd> in the MuJoCo viewer</h3>
+      <p>The viewer reads <code>live_state.json</code> and drives the avatar from the recognized
+      label and feature strength — so in <code>--mode live</code> the avatar mirrors the person
+      wearing the sensors. Don’t combine <kbd>L</kbd> with <code>--mode mujoco</code>: the avatar
+      would be recognizing its own motion.</p>
+    </div>
+  </section>
+
+  <p class="foot">
+    Timing summary: sensors stream ~60&nbsp;Hz · both JSON files are written atomically every
+    30&nbsp;ms · calibration holds 2&nbsp;s · one avatar repetition = 2&nbsp;s sine + 0.4&nbsp;s
+    neutral gap · classifier commits a label after 5 consistent samples (~100&nbsp;ms).
+    All left/right labels are in the wearer’s / avatar’s own body frame; the on-screen camera
+    faces the avatar, so the view is a mirror.
+  </p>
+</div>
+</body></html>

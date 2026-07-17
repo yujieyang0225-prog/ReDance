@@ -22,7 +22,7 @@ import glob
 import os
 
 from mapping import (
-    CHANNELS, parse_line, calibrate_neutral, MovementMapper,
+    REQUIRED_CHANNELS, parse_line, calibrate_neutral, MovementMapper,
 )
 
 NEUTRAL = "NEUTRAL"
@@ -32,13 +32,60 @@ LIFT_R = "LIFT_R"
 TURN_LEFT = "TURN_LEFT"
 TURN_RIGHT = "TURN_RIGHT"
 
+SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "patient_settings.txt")
+DEFAULT_THRESHOLDS = {
+    "LEAN_GATE": 0.50,
+    "LIFT_L_GATE": 0.50,
+    "LIFT_R_GATE": 0.50,
+    "TURN_L_GATE": 0.50,
+    "TURN_R_GATE": 0.50,
+}
+
+
+def _load_patient_thresholds(path):
+    values = DEFAULT_THRESHOLDS.copy()
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, raw_value = [part.strip() for part in line.split("=", 1)]
+                if key not in values:
+                    continue
+                try:
+                    values[key] = float(raw_value)
+                except ValueError:
+                    continue
+    except OSError:
+        pass
+    return values
+
+
+# decision thresholds on the normalized features; the GUI draws these as
+# threshold lines on the feature bars
+_thresholds = _load_patient_thresholds(SETTINGS_FILE)
+LEAN_GATE = _thresholds["LEAN_GATE"]
+LIFT_L_GATE = _thresholds["LIFT_L_GATE"]
+LIFT_R_GATE = _thresholds["LIFT_R_GATE"]
+TURN_L_GATE = _thresholds["TURN_L_GATE"]
+TURN_R_GATE = _thresholds["TURN_R_GATE"]
+
 
 class ActionClassifier:
-    def __init__(self, mapper, tilt_gate=0.45, turn_gate=0.35,
+    def __init__(self, mapper,
+                 lean_gate=LEAN_GATE,
+                 lift_l_gate=LIFT_L_GATE,
+                 lift_r_gate=LIFT_R_GATE,
+                 turn_l_gate=TURN_L_GATE,
+                 turn_r_gate=TURN_R_GATE,
                  turn_presence=0.20, debounce=5):
         self.mapper = mapper
-        self.tilt_gate = tilt_gate
-        self.turn_gate = turn_gate
+        self.lean_gate = lean_gate
+        self.lift_l_gate = lift_l_gate
+        self.lift_r_gate = lift_r_gate
+        self.turn_l_gate = turn_l_gate
+        self.turn_r_gate = turn_r_gate
         self.turn_presence = turn_presence
         self.debounce = debounce
         self._candidate = NEUTRAL
@@ -46,19 +93,28 @@ class ActionClassifier:
         self._committed = NEUTRAL
 
     def _raw_label(self, cs):
-        tilts = {LEAN: cs["lean"], LIFT_L: cs["lift_L"], LIFT_R: cs["lift_R"]}
-        best = max(tilts, key=lambda k: tilts[k])
-        if tilts[best] >= self.tilt_gate:
-            return best
+        tilts = {
+            LEAN: (cs["lean"], self.lean_gate),
+            LIFT_L: (cs["lift_L"], self.lift_l_gate),
+            LIFT_R: (cs["lift_R"], self.lift_r_gate),
+        }
+        tilt_hits = [label for label, (value, gate) in tilts.items()
+                     if value >= gate]
+        if tilt_hits:
+            return max(tilt_hits, key=lambda label: tilts[label][0])
         # TURN only if NO tilt action is even partially present: this is the
         # mutual-exclusion lockout that suppresses the yaw spike at the start
         # of a leg-lift from being read as a turn.
-        if tilts[best] < self.turn_presence and abs(cs["turn"]) >= self.turn_gate:
-            return TURN_RIGHT if cs["turn"] > 0 else TURN_LEFT
+        max_tilt = max(value for value, _gate in tilts.values())
+        if max_tilt < self.turn_presence:
+            if cs["turn"] >= self.turn_r_gate:
+                return TURN_RIGHT
+            if -cs["turn"] >= self.turn_l_gate:
+                return TURN_LEFT
         return NEUTRAL
 
-    def update(self, sample):
-        cs = self.mapper.update(sample)
+    def update(self, sample, dt=None):
+        cs = self.mapper.update(sample, dt)
         raw = self._raw_label(cs)
         if raw == self._candidate:
             self._count += 1
@@ -80,7 +136,7 @@ def load_log(path):
         if line == "" or line.startswith("=~"):
             continue
         _, v, ok = parse_line(line)
-        if ok and all(k in v for k in CHANNELS):
+        if ok and all(k in v for k in REQUIRED_CHANNELS):
             out.append(v)
     return out
 
@@ -123,7 +179,9 @@ def evaluate(files):
         n_neutral = 0
         true = true_category(f)
         for v in s:
-            lab = clf.update(v)["label"]
+            # offline replay runs faster than real time; pass the stream's
+            # nominal sample interval so yaw integration stays correct
+            lab = clf.update(v, dt=1.0 / 38.0)["label"]
             counts[lab] = counts.get(lab, 0) + 1
             if lab == NEUTRAL:
                 n_neutral += 1

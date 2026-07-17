@@ -23,7 +23,7 @@
 import json
 import math
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 
 # ---------------------------------------------------------------------------
 # Shared parse contract (identical to the acquisition side)
