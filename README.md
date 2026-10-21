@@ -26,7 +26,8 @@ Built for the *Neurorehabilitation Projektpraktikum* at TUM (summer 2026).
 | `Arduino/` | ESP32 firmware sketches for 1–5 ICM-20948 IMUs (the app uses `IMU_getAccGyr_twoAddr_oneMult_fourIMU`) |
 | `imu_collect.py`, `datalogger/` | Recording tools and plotting scripts for raw IMU logs |
 | `dataset/`, `logs/`, `datalogger/logs/` | Recorded sensor data from test sessions |
-| `easy_videos/`, `instruction_video.mp4`, `sounds/`, `rehab_music.mp3` | Media played by the game |
+| `easy_videos/`, `sounds/`, `rehab_music.mp3` | Media played by the game (one short clip per movement, spoken German feedback, background music) |
+| `instruction_video.mp4` | Full-length instruction video of the routine (the game now plays the clips in `easy_videos/` instead) |
 | `patient_settings.txt` | Per-patient movement thresholds read by `classify.py` |
 | `Dance_Sequence.xlsx` | The choreography the routine is based on |
 | `system_flowchart.html` | Interactive flowchart of the whole system (open in a browser) |
@@ -36,8 +37,8 @@ Built for the *Neurorehabilitation Projektpraktikum* at TUM (summer 2026).
 
 | File | Role |
 |---|---|
-| `run_professional_rehab.py` | MuJoCo viewer: animates the avatar, publishes its joint angles in real time (`mujoco_motion.json`), can also mirror recognized movements (live mode, key `L`) |
-| `live_action.py` | Recognition GUI: reads a motion source, classifies the current movement, runs the routine game, publishes results (`live_state.json`) |
+| `run_professional_rehab.py` | Optional standalone MuJoCo viewer: animates the avatar by keyboard and can mirror recognized movements (key `L`) |
+| `live_action.py` | Main app: reads the sensors (or the keyboard simulator), classifies the current movement, shows the avatar, runs the routine game, logs each session, publishes results (`live_state.json`) |
 | `classify.py` | Single-label action classifier (NEUTRAL, LEAN, LIFT_L, LIFT_R, TURN_LEFT, TURN_RIGHT) with gating and debounce |
 | `mapping.py` | Turns raw IMU samples into normalized lean/lift/turn features (lean from the lumbar sensor, turn from the cervical sensor, lifts from the thighs) |
 | `game.py` | Routine game: the warmup + dance choreography, step by step |
@@ -93,50 +94,44 @@ Built for the *Neurorehabilitation Projektpraktikum* at TUM (summer 2026).
 
 ---
 
-## 2. Run without sensors (avatar demo)
+## 2. Run without sensors (simulator)
 
-Two programs run side by side and talk through small JSON files.
+```bash
+python live_action.py --mode simulate
+```
 
-1. **Terminal 1 — the MuJoCo avatar viewer:**
+The game window opens (German UI). Click **Spiel Starten**, then play the
+routine with the keyboard:
 
-   ```bash
-   # macOS — MUST use mjpython (installed with the mujoco package):
-   ./.venv/bin/mjpython run_professional_rehab.py
-   ```
+| Key | Move |
+|---|---|
+| `Q` | Neutral (rest) |
+| `W` | Trunk bending (lean) |
+| `E` | Left leg raise |
+| `R` | Right leg raise |
+| `T` | Trunk rotation left |
+| `Y` | Trunk rotation right |
 
-   ```powershell
-   # Windows — plain python works:
-   python run_professional_rehab.py
-   ```
+### Optional: standalone MuJoCo viewer
 
-   A window opens with a seated avatar.
+`run_professional_rehab.py` opens a separate 3D avatar that can mirror the
+recognized movement. Start it in a second terminal (venv active), click its
+window and press `L`:
 
-2. **Terminal 2 — the movement recognition window**
-   (activate the venv in this terminal too):
+```bash
+# macOS — MUST use mjpython (installed with the mujoco package):
+./.venv/bin/mjpython run_professional_rehab.py
+```
 
-   ```bash
-   python live_action.py --mode mujoco
-   ```
+```powershell
+# Windows — plain python works:
+python run_professional_rehab.py
+```
 
-   It waits for the viewer, calibrates for 2 seconds (keep the avatar
-   neutral), then starts recognizing and running the routine.
-
-3. **Drive the avatar.** Click the MuJoCo window; each key queues ONE
-   repetition (neutral → max → neutral, ~2 s). Press several keys to
-   perform a string of moves in order:
-
-   | Key | Move (avatar's own left/right) |
-   |---|---|
-   | `1` | Trunk rotation LEFT |
-   | `2` | Trunk rotation RIGHT |
-   | `3` | Trunk bending (lean) |
-   | `4` | LEFT leg raise |
-   | `5` | RIGHT leg raise |
-   | `0` | Reset / clear queue |
-
-   Note: the camera faces the avatar, so the screen is a mirror — the
-   avatar's left appears on your right. All labels are the avatar's own
-   anatomical left/right, the same frame the body-worn sensors report.
+Keys `1`–`5` animate the avatar by hand (rotate left/right, lean, left/right
+leg raise; `0` resets). The camera faces the avatar, so the screen is a
+mirror: all labels use the avatar's own anatomical left/right, the same frame
+the body-worn sensors report.
 
 ---
 
@@ -172,17 +167,19 @@ SERIAL_PORT = "COM5"                            # Windows example
 
 ### Start a session
 
-1. Start the viewer (Terminal 1, as above) if you want the avatar.
-2. Start recognition on the sensors (Terminal 2):
+1. Start recognition on the sensors:
 
    ```bash
    python live_action.py --mode live
    ```
 
-3. Strap the sensors on, sit still in neutral, and click
-   **Recalibrate (hold still)** — calibration takes 2 seconds and captures
-   your personal neutral pose. Recalibrate any time a sensor is moved.
-4. Press `L` in the MuJoCo viewer if you want the avatar to mirror you.
+   The window shows the avatar on the left (it mirrors your recognized
+   movement), the game in the middle and the instruction video on the right.
+2. Strap the sensors on, sit still in neutral, and click
+   **Neu kalibrieren (bitte still sitzen)** — calibration takes 2 seconds and
+   captures your personal neutral pose. Recalibrate any time a sensor is
+   moved.
+3. Click **Spiel Starten** to begin the routine.
 
 ---
 
@@ -211,34 +208,26 @@ Scoring: +10 per correct move, +20 per completed step, +100 for finishing
 the routine — 760 points per round, then it loops. Edit `ROUTINE` at the
 top of `game.py` to change the choreography.
 
-### Simulator mode (no avatar, no sensors)
-
-```bash
-python live_action.py --mode simulate
-```
-
-Keys: `Q` neutral, `W` lean, `E` left lift, `R` right lift, `T` turn left,
-`Y` turn right.
-
 ---
 
 ## 5. How it works (data flow)
 
 ```
-ESP32 (4 IMUs, serial)  --or--  MuJoCo avatar (mujoco_motion.json)
+ESP32 (4 IMUs, serial)  --or--  keyboard simulator (--mode simulate)
             |                            |
             +---------> live_action.py <-+
                         mapping.py -> classify.py -> game.py
                               |
+              avatar panel + game UI + session log (logs/game_sessions/)
+                              |
                         live_state.json
                               |
-            MuJoCo viewer live mode (press L: avatar mirrors you)
+            optional MuJoCo viewer (press L: avatar mirrors you)
 ```
 
-All motion sources are converted to the same normalized features
-(`lean`, `lift_L`, `lift_R`, signed `turn` that tracks the held angle) and
-pass through the same classifier, so recognition validated against the
-avatar carries over unchanged to the real sensors.
+Sensor data is converted to normalized features (`lean`, `lift_L`, `lift_R`,
+and a signed `turn` that tracks the held angle) and passes through one
+classifier, which picks a single dominant movement with debouncing.
 
 ---
 
@@ -252,7 +241,7 @@ avatar carries over unchanged to the real sensors.
 | A lift bar stuck at 0 while the leg moves | That thigh IMU isn't delivering data (NaN or zeros) — check the multiplexer wiring; the app keeps running on the healthy sensors |
 | Features large while sitting still | Sensors moved after calibration — click **Recalibrate (hold still)** |
 | Turn left/right look mirrored on screen | The screen is a mirror view; labels are in YOUR body frame, not the observer's |
-| "Video file not found" in the video panel | Optional: place `instruction_video.mp4` next to `live_action.py` |
+| "Video file not found" in the video panel | The game plays the short clips in `easy_videos/` — make sure that folder sits next to `live_action.py` |
 
 ---
 
