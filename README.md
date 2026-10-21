@@ -1,10 +1,36 @@
-# Neurorehabilitation Projektpraktikum
+# ReDance — sensor-driven neurorehabilitation
 
-Seated trunk/leg rehabilitation exercises with a MuJoCo avatar, real-time
-movement recognition, and a choreographed exercise routine (warmup + dance)
-scored as a game. Movements can come from three sources: the MuJoCo avatar
-itself (keyboard-driven), a keyboard simulator, or body-worn ESP32 IMU
-sensors.
+ReDance turns seated trunk and leg rehabilitation exercises into a dance game.
+Body-worn IMU sensors (or a MuJoCo avatar, for testing without hardware) feed a
+real-time movement recognizer, which guides the patient through a choreographed
+warmup + dance routine with videos, music and spoken German feedback. Each
+session is recorded so a physiotherapist can replay it later with detailed
+joint-angle traces.
+
+Built for the *Neurorehabilitation Projektpraktikum* at TUM (summer 2026).
+
+![System overview: IMU sensors, MuJoCo avatar and the game](docs/images/system_overview.png)
+
+![One interface, two modes: live patient mode and recorded physio mode](docs/images/two_modes.png)
+
+**Slides:** [final presentation (PDF)](docs/ReDance_Final_Presentation.pdf) ·
+[editable .pptx](docs/ReDance_Final_Presentation.pptx) ·
+[software section (.pptx)](docs/ReDance_Software_Section.pptx)
+
+## Repository layout
+
+| Path | What it is |
+|---|---|
+| `live_action.py`, `mapping.py`, `classify.py`, `game.py` | The app: recognition GUI, IMU → feature mapping, movement classifier, routine game |
+| `run_professional_rehab.py`, `professional_rehab_avatar.xml` | MuJoCo avatar viewer and model |
+| `Arduino/` | ESP32 firmware sketches for 1–5 ICM-20948 IMUs (the app uses `IMU_getAccGyr_twoAddr_oneMult_fourIMU`) |
+| `imu_collect.py`, `datalogger/` | Recording tools and plotting scripts for raw IMU logs |
+| `dataset/`, `logs/`, `datalogger/logs/` | Recorded sensor data from test sessions |
+| `easy_videos/`, `instruction_video.mp4`, `sounds/`, `rehab_music.mp3` | Media played by the game |
+| `patient_settings.txt` | Per-patient movement thresholds read by `classify.py` |
+| `Dance_Sequence.xlsx` | The choreography the routine is based on |
+| `system_flowchart.html` | Interactive flowchart of the whole system (open in a browser) |
+| `docs/` | Final presentation and images |
 
 ## Components
 
@@ -27,9 +53,8 @@ sensors.
 1. Open Terminal and clone the repository:
 
    ```bash
-   git clone https://github.com/morenzoe/Neurorehabilitation_Projekpraktikum.git
-   cd Neurorehabilitation_Projekpraktikum
-   git checkout Combination
+   git clone https://github.com/yujieyang0225-prog/ReDance.git
+   cd ReDance
    ```
 
 2. Create a virtual environment and install the dependencies
@@ -49,9 +74,8 @@ sensors.
 2. Open *PowerShell* (or *Command Prompt*) and clone the repository:
 
    ```powershell
-   git clone https://github.com/morenzoe/Neurorehabilitation_Projekpraktikum.git
-   cd Neurorehabilitation_Projekpraktikum
-   git checkout Combination
+   git clone https://github.com/yujieyang0225-prog/ReDance.git
+   cd ReDance
    ```
 
    (If `git` is missing, install it from https://git-scm.com/download/win .)
@@ -122,7 +146,11 @@ Two programs run side by side and talk through small JSON files.
 
 - Adafruit Feather ESP32 V2 flashed with
   `Arduino/IMU_getAccGyr_twoAddr_oneMult_fourIMU` (board package v2.0.17,
-  ICM20948_WE library v1.1.11, 115200 baud).
+  ICM20948_WE library v1.1.11, 115200 baud). In the Arduino IDE, add
+  `https://dl.espressif.com/dl/package_esp32_index.json` under
+  *File → Preferences → Additional boards manager URLs*, install **esp32**
+  v2.0.17 in the Boards Manager, select **Adafruit Feather ESP32 V2**, and
+  install **ICM20948_WE** by Wolfgang Ewald from the Library Manager.
 - Four ICM-20948 IMUs: **IMU0 lumbar** (lower back), **IMU1 cervical**
   (neck), **IMU3 left thigh**, **IMU4 right thigh**. The thigh sensors
   connect through the I2C multiplexer.
@@ -225,3 +253,27 @@ avatar carries over unchanged to the real sensors.
 | Features large while sitting still | Sensors moved after calibration — click **Recalibrate (hold still)** |
 | Turn left/right look mirrored on screen | The screen is a mirror view; labels are in YOUR body frame, not the observer's |
 | "Video file not found" in the video panel | Optional: place `instruction_video.mp4` next to `live_action.py` |
+
+---
+
+## Team
+
+ReDance was built by **Simon Appoltshauser, Emily Joyce, Eraraya Morenzo Muten,
+Maysa Ouaja and Yujie Yang**.
+
+This repository is maintained by Yujie Yang. It continues the team's original
+repository,
+[morenzoe/Neurorehabilitation_Projekpraktikum](https://github.com/morenzoe/Neurorehabilitation_Projekpraktikum),
+with the full commit history kept, so every change still shows its original
+author. Run `git shortlog -sn` to see who contributed what.
+
+Branches:
+
+- `main` — the complete project (the original `Combination` branch, with the
+  original `main` merged in).
+- `Simulation` — earlier keyboard-only simulation, kept for reference.
+
+## License
+
+MIT — see [LICENSE](LICENSE). The original copyright notice
+(© 2026 Eraraya Morenzo Muten) is kept as the license requires.
