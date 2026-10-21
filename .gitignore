@@ -1,0 +1,12 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Written by the apps while they run (live_action.py <-> run_professional_rehab.py)
+live_state.json
+mujoco_motion.json
